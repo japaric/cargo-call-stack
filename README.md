@@ -64,7 +64,7 @@ then prints a dot file to stdout. See `cargo call-stack -h` for a list of build
 options (e.g. `--features`).
 
 ``` console
-$ cargo +nightly call-stack --example app > cg.svg
+$ cargo +nightly call-stack --example app > cg.dot
 warning: assuming that asm!("") does *not* use the stack
 warning: assuming that asm!("") does *not* use the stack
 ```
