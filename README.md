@@ -44,6 +44,8 @@ moment.
 
 [fmt]: https://japaric.github.io/cargo-call-stack/fmt.svg
 
+The tool only supports ELF binaries.
+
 The tool depends on unstable compiler features and can only be used with a
 nightly toolchain. Due to this `cargo-call-stack` could stop working after
 updating the compiler.
