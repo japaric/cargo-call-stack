@@ -64,7 +64,7 @@ warning: assuming that asm!("") does *not* use the stack
 Graphviz's `dot` can be used to generate an image from this dot file.
 
 ``` console
-$ dot -Tsvg -Nfontname='Fira Code' -Nshape=box cg.dot > cg.sv
+$ dot -Tsvg -Nfontname='Fira Code' -Nshape=box cg.dot > cg.svg
 ```
 
 ![Call graph with direct function calls](assets/direct.png)
