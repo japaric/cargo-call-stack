@@ -13,7 +13,7 @@
 - Each node (function) in the call graph includes the local stack usage of the
   function, if provided by LLVM (see [`-Z emit-stack-sizes`]).
 
-[`-Z emit-stack-sizes`]; https://doc.rust-lang.org/nightly/unstable-book/compiler-flags/emit-stack-sizes.html
+[`-Z emit-stack-sizes`]: https://doc.rust-lang.org/nightly/unstable-book/compiler-flags/emit-stack-sizes.html
 
 - If the call graph contains no cycles then the tool also computes the maximum
   stack usage of each function, that is the stack usage that includes the stack
