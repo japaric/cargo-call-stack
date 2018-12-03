@@ -30,6 +30,10 @@ The tool assumes that all instances of inline assembly (`asm!`) use zero bytes
 of stack. This is not always the case so the tool prints a warning message
 for each `asm!` statement it encounters.
 
+The tool assumes that branching (calling a function) does not use the stack
+(i.e. no register is pushed onto the stack when branching). This may not be true
+for *all* the architectures that Rust supports.
+
 Analysis of `std` programs is currently out of scope. Bug reports related to
 `std` programs will be given the lowest priority. The rationale is that the
 main goal of this tool is stack analysis, the analysis currently can't
@@ -53,7 +57,9 @@ $ cargo +beta install cargo-call-stack
 
 ## Example usage
 
-The tool prints a dot file to stdout.
+The tool build your program in release mode with LTO enabled, analyses it and
+then prints a dot file to stdout. See `cargo call-stack -h` for a list of build
+options (e.g. `--features`).
 
 ``` console
 $ cargo +nightly call-stack --example app > cg.svg
