@@ -2,7 +2,7 @@
 
 > Whole program static stack analysis
 
-![Call graph with direct function calls](assets/direct.png)
+[![Call graph with direct function calls](assets/direct.png)](https://japaric.github.io/cargo-call-stack/direct.svg)
 
 ## Features
 
@@ -67,7 +67,7 @@ Graphviz's `dot` can be used to generate an image from this dot file.
 $ dot -Tsvg -Nfontname='Fira Code' -Nshape=box cg.dot > cg.svg
 ```
 
-![Call graph with direct function calls](assets/direct.png)
+[![Call graph with direct function calls](assets/direct.png)](https://japaric.github.io/cargo-call-stack/direct.svg)
 
 Each node in this graph represents a function, which could be a free function,
 an inherent method or a trait method. Each directed edge indicates a "calls"
@@ -205,7 +205,7 @@ unsafe fn SysTick() {
 
 With the patched compiler the tool generates the following graph.
 
-![Call graph with dynamic dispatch (trait object)](assets/dyn.png)
+[![Call graph with dynamic dispatch (trait object)](assets/dyn.png)](https://japaric.github.io/cargo-call-stack/dyn.svg)
 
 Note that `SysTick` invokes the `bar` method on the trait object `dyn Foo`. The
 tool knows that there are only two `Foo` implementers in the final binary; this
