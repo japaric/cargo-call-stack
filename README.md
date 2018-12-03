@@ -165,7 +165,15 @@ trait Foo {
     fn bar(&self, x: i32) -> i32;
 }
 
-struct X;
+struct A; // one implementer
+
+impl Foo for A {
+    fn bar(&self, _x: i32) -> i32 {
+        unreachable!()
+    }
+}
+
+struct X; // two implementers
 
 impl Foo for X {
     fn bar(&self, x: i32) -> i32 {
@@ -179,7 +187,7 @@ impl Foo for X {
     }
 }
 
-struct Y;
+struct Y; // three implementers
 
 impl Foo for Y {
     fn bar(&self, x: i32) -> i32 {
