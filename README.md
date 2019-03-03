@@ -1,67 +1,59 @@
 # `cargo-call-stack`
 
-> Whole program static stack analysis
+> Static, whole program stack analysis
 
-[![Call graph with direct function calls](assets/direct.png)](https://japaric.github.io/cargo-call-stack/direct.svg)
+**HEADS UP**: This tool relies on an experimental feature (`-Z stack-sizes`)
+and implementation details of `rustc` (like symbol mangling) and could stop
+working with a nightly toolchain at any time. You have been warned!
 
 ## Features
 
-- The tool produces a call graph of the selected program as a [dot file].
+- The tool produces the full call graph of a program as a [dot file].
 
 [dot file]: https://www.graphviz.org/doc/info/lang.html
 
+- A [start point](#start-point) can be specified to analyze only the call graph
+  that begins at that function.
+
 - Each node (function) in the call graph includes the local stack usage of the
-  function, if provided by LLVM (see [`-Z emit-stack-sizes`]).
+  function, *if* available (see [`-Z emit-stack-sizes`]).
 
 [`-Z emit-stack-sizes`]: https://doc.rust-lang.org/nightly/unstable-book/compiler-flags/emit-stack-sizes.html
 
-- If the call graph contains no cycles then the tool also computes the maximum
-  stack usage of each function, that is the stack usage that includes the stack
-  usage of the functions the function may invoke.
+- If there's at least some stack usage information available then the *maximum
+  stack usage* of each function is also computed, or at least a lower bound is
+  provided. Maximum stack usage of a function here refers to the stack usage
+  that includes the stack used by functions that the function may invoke.
 
-## Caveats
-
-Currently the call graph and stack analysis can only reason about *direct*
-function calls. Indirect function calls, via pointers (e.g. `fn()`) or trait
-objects, are not properly supported. If the program contain these indirect
-function calls then the result of the analysis will be imprecise.
-
-The tool assumes that all instances of inline assembly (`asm!`) use zero bytes
-of stack. This is not always the case so the tool prints a warning message
-for each `asm!` statement it encounters.
-
-The tool assumes that branching (calling a function) does not use the stack
-(i.e. no register is pushed onto the stack when branching). This may not be true
-for *all* the architectures that Rust supports.
-
-Analysis of `std` programs is currently out of scope. Bug reports related to
-`std` programs will be given the lowest priority. The rationale is that the
-main goal of this tool is stack analysis, the analysis currently can't
-handle indirect function calls, [`std::fmt` uses plenty of trait objects and
-function pointers][fmt] and all `std` programs use `std::fmt` (yes, even the
-simplest one: `fn main() {}`) thus analyzing `std` programs is pointless at the
-moment.
-
-[fmt]: https://japaric.github.io/cargo-call-stack/fmt.svg
-
-The tool only supports ELF binaries.
-
-The tool depends on unstable compiler features and can only be used with a
-nightly toolchain. Due to this `cargo-call-stack` could stop working after
-updating the compiler.
+- The tool has *imperfect* support for calls through function pointers (`fn()`)
+  and dynamic dispatch (`dyn Trait`). You *will* get a call graph from programs
+  that do indirect calls but it will likely be missing edges or contain
+  incorrect edges. It's best to use this tool on programs that only do direct
+  function calls.
 
 ## Installation
 
 ``` console
-$ # Rust >=1.31
-$ cargo +beta install cargo-call-stack
+$ # NOTE always use the latest stable release
+$ cargo +stable install cargo-call-stack
 ```
 
 ## Example usage
 
-The tool build your program in release mode with LTO enabled, analyses it and
+The tool builds your program in release mode with LTO enabled, analyses it and
 then prints a dot file to stdout. See `cargo call-stack -h` for a list of build
 options (e.g. `--features`).
+
+**IMPORTANT**: As the author of the program you must ensure that the
+`.stack_sizes` section survives the linker (doesn't get GC-ed). Unfortunately we
+can't do that for you because tweaking the linking process from Cargo is tricky
+and error prone. If you are using the [`cortex-m-rt`] crate then everything will
+Just Work. But if you are not then you'll need to use a linker script; see the
+documentation on [`-Z emit-stack-sizes`] for more information. If you don't
+preserve the `.stack_sizes` then the tool will have zero information about the
+stack usage of your program.
+
+[`cortex-m-rt`]: https://crates.io/crates/cortex-m-rt
 
 ``` console
 $ cargo +nightly call-stack --example app > cg.dot
@@ -69,7 +61,7 @@ warning: assuming that asm!("") does *not* use the stack
 warning: assuming that asm!("") does *not* use the stack
 ```
 
-Graphviz's `dot` can be used to generate an image from this dot file.
+Graphviz's `dot` can then be used to generate an image from this dot file.
 
 ``` console
 $ dot -Tsvg -Nfontname='Fira Code' -Nshape=box cg.dot > cg.svg
@@ -90,8 +82,8 @@ This is the `no_std` program used to generate the call graph shown above.
 
 ``` rust
 #![feature(asm)]
-#![no_std]
 #![no_main]
+#![no_std]
 
 extern crate panic_halt;
 
@@ -101,12 +93,6 @@ use cortex_m_rt::{entry, exception};
 
 #[entry]
 fn main() -> ! {
-    let x = 0;
-    unsafe {
-        // force `x` to be on the stack
-        ptr::read_volatile(&&x);
-    }
-
     foo();
 
     bar();
@@ -116,122 +102,493 @@ fn main() -> ! {
 
 #[inline(never)]
 fn foo() {
-    unsafe {
-        // spill variables onto the stack
-        asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5));
-    }
+    // spill variables onto the stack
+    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
 }
 
 #[inline(never)]
 fn bar() {
-    unsafe {
-        // spill variables onto the stack
-        asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7));
-    }
+    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
 }
 
 #[exception]
 fn SysTick() {
     bar();
 }
+
+#[inline(never)]
+fn baz() {
+    let x = 0;
+    unsafe {
+        // force `x` to be on the stack
+        ptr::read_volatile(&&x);
+    }
+
+}
 ```
 
-## PoC: support for trait objects
+> In the previous example the call graph contained disconnected subgraphs. The
+> reason for that is *exceptions* (also known as interrupts). `SysTick`, for
+> example, is an exception handler that can preempt any function called from
+> `Reset`. This exception handler is never called from software but can be
+> invoked by the hardware at any time. These exception handlers can appear as
+> the roots of disconnected subgraphs.
 
-With help from the compiler the tool can reason about dynamic dispatch. As a PoC
-we [patched the compiler] to generate call site metadata that lets `cargo
-call-stack` include trait objects in its analysis.
+## Start point
 
-> **NOTE** That branch is a PoC and it's only supported by version 0.1.0 of
-> `cargo-call-stack`.
+In some cases you may be interested in the maximum stack usage of a particular
+function. The tool lets you specify a *start point* which will be used to filter
+the call graph to only include nodes reachable from that function.
 
-[patched the compiler]: https://github.com/japaric/rust/tree/metadata-poc-do-not-delete
+If we invoke the tool on the previous program but select `main` as the start
+point we get this call graph:
 
-The program below uses a trait object (`dyn Foo`) in the `SysTick` exception
-handler.
+``` console
+$ cargo +nightly call-stack --example app main > cg.dot
+warning: assuming that asm!("") does *not* use the stack
+warning: assuming that asm!("") does *not* use the stack
+```
+
+[![Filtered call graph](assets/filtered.png)](https://japaric.github.io/cargo-call-stack/filtered.svg)
+
+Notice that `SysTick` and `baz` don't appear in this call graph since they are
+not reachable from `main`.
+
+## Cycles
+
+The tool can, in some cases, compute the maximum stack usage of programs that
+involve recursion. Recursion appears as cycles in the call graph. Consider the
+following example:
 
 ``` rust
-#![no_std]
+#![feature(asm)]
 #![no_main]
+#![no_std]
 
 extern crate panic_halt;
 
-use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
 
-use cortex_m::interrupt;
 use cortex_m_rt::{entry, exception};
 
-trait Foo {
-    fn bar(&self, x: i32) -> i32;
-}
+static X: AtomicBool = AtomicBool::new(true);
 
-struct A; // one implementer
-
-impl Foo for A {
-    fn bar(&self, _x: i32) -> i32 {
-        unreachable!()
-    }
-}
-
-struct X; // two implementers
-
-impl Foo for X {
-    fn bar(&self, x: i32) -> i32 {
-        let y = 0;
-        unsafe {
-            // force `y` to be allocated on the stack
-            ptr::read_volatile(&&y);
-        }
-
-        x + 1
-    }
-}
-
-struct Y; // three implementers
-
-impl Foo for Y {
-    fn bar(&self, x: i32) -> i32 {
-        let y = 0u64;
-        unsafe {
-            // force `y` to be allocated on the stack
-            ptr::read_volatile(&&y);
-        }
-
-        2 * x
-    }
-}
-
-static mut Z: &Foo = &X;
-
+#[inline(never)]
 #[entry]
-unsafe fn main() -> ! {
-    loop {
-        interrupt::free(|_| {
-            Z = &Y;
-        });
+fn main() -> ! {
+    foo();
+
+    quux();
+
+    loop {}
+}
+
+// these three functions form a cycle that breaks when `SysTick` runs
+#[inline(never)]
+fn foo() {
+    if X.load(Ordering::Relaxed) {
+        bar()
     }
+}
+
+#[inline(never)]
+fn bar() {
+    if X.load(Ordering::Relaxed) {
+        baz()
+    }
+}
+
+#[inline(never)]
+fn baz() {
+    if X.load(Ordering::Relaxed) {
+        foo()
+    }
+}
+
+#[inline(never)]
+fn quux() {
+    // spill variables onto the stack
+    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
 }
 
 #[exception]
-unsafe fn SysTick() {
-    // dynamic dispatch
-    Z.bar(42);
+fn SysTick() {
+    X.store(false, Ordering::Relaxed);
 }
 ```
 
-With the patched compiler the tool generates the following graph.
+It produces the following call graph:
 
-[![Call graph with dynamic dispatch (trait object)](assets/dyn.png)](https://japaric.github.io/cargo-call-stack/dyn.svg)
+[![Call graph with a cycle](assets/cycle.png)](https://japaric.github.io/cargo-call-stack/cycle.svg)
 
-Note that `SysTick` invokes the `bar` method on the trait object `dyn Foo`. The
-tool knows that there are only two `Foo` implementers in the final binary; this
-is reflected in the call graph and the tool is able to compute the maximum stack
-usage of `SysTick`.
+The functions `foo`, `bar` and `baz` use zero stack space thus the cycle formed
+by them also uses zero stack space. In this particular case the maximum stack
+usage of `main` can be computed.
 
-If you are interested in making the compiler generate the required information
-to make this tool properly support dynamic dispatch then check out [this issue].
+For the curious this is the disassembly of the "cyclic" program:
 
-[this issue]: https://github.com/japaric/cargo-call-stack/issues/1
+``` armasm
+08000400 <app::foo>:
+ 8000400:       f240 0000       movw    r0, #0
+ 8000404:       f2c2 0000       movt    r0, #8192       ; 0x2000
+ 8000408:       7800            ldrb    r0, [r0, #0]
+ 800040a:       0600            lsls    r0, r0, #24
+ 800040c:       bf18            it      ne
+ 800040e:       f000 b801       bne.w   8000414 <app::bar>
+ 8000412:       4770            bx      lr
+
+08000414 <app::bar>:
+ 8000414:       f240 0000       movw    r0, #0
+ 8000418:       f2c2 0000       movt    r0, #8192       ; 0x2000
+ 800041c:       7800            ldrb    r0, [r0, #0]
+ 800041e:       0600            lsls    r0, r0, #24
+ 8000420:       bf18            it      ne
+ 8000422:       f000 b801       bne.w   8000428 <app::baz>
+ 8000426:       4770            bx      lr
+
+08000428 <app::baz>:
+ 8000428:       f240 0000       movw    r0, #0
+ 800042c:       f2c2 0000       movt    r0, #8192       ; 0x2000
+ 8000430:       7800            ldrb    r0, [r0, #0]
+ 8000432:       0600            lsls    r0, r0, #24
+ 8000434:       bf18            it      ne
+ 8000436:       f7ff bfe3       bne.w   8000400 <app::foo>
+ 800043a:       4770            bx      lr
+
+0800043c <app::quux>:
+ 800043c:       b580            push    {r7, lr}
+ 800043e:       f04f 0c00       mov.w   ip, #0
+ 8000442:       f04f 0e01       mov.w   lr, #1
+ 8000446:       2202            movs    r2, #2
+ 8000448:       2303            movs    r3, #3
+ 800044a:       2004            movs    r0, #4
+ 800044c:       2105            movs    r1, #5
+ 800044e:       bd80            pop     {r7, pc}
+
+08000450 <main>:
+ 8000450:       f7ff ffd6       bl      8000400 <app::foo>
+ 8000454:       f7ff fff2       bl      800043c <app::quux>
+ 8000458:       e7fe            b.n     8000458 <main+0x8>
+```
+
+And yes, the estimated maximum stack usage is correct as shown in this debug
+session:
+
+``` console
+(gdb) b app::foo
+
+(gdb) b app::bar
+
+(gdb) b app::baz
+
+(gdb) c
+Continuing.
+
+Breakpoint 3, main () at src/main.rs:16
+16          foo();
+
+(gdb) p $sp
+$1 = (void *) 0x20005000
+
+(gdb) c
+Continuing.
+halted: PC: 0x08000400
+
+Breakpoint 4, app::foo () at src/main.rs:31
+31          if X.load(Ordering::Relaxed) {
+
+(gdb) p $sp
+$2 = (void *) 0x20005000
+
+(gdb) c
+Continuing.
+halted: PC: 0x0800040c
+
+Breakpoint 5, app::bar () at src/main.rs:38
+38          if X.load(Ordering::Relaxed) {
+
+(gdb) p $sp
+$3 = (void *) 0x20005000
+
+(gdb) c
+Continuing.
+halted: PC: 0x08000420
+
+Breakpoint 6, app::baz () at src/main.rs:45
+45          if X.load(Ordering::Relaxed) {
+
+(gdb) p $sp
+$4 = (void *) 0x20005000
+
+(gdb) c
+Continuing.
+halted: PC: 0x08000434
+
+Breakpoint 4, app::foo () at src/main.rs:31
+31          if X.load(Ordering::Relaxed) {
+
+(gdb) p $sp
+$5 = (void *) 0x20005000
+```
+
+## Trait object dispatch
+
+In *some* cases the tool can produce correct call graphs for programs that use
+trait objects -- more details about where and how it fails in the ["Known
+limitations"][#known-limitations] section. Here's an example:
+
+``` rust
+#![feature(asm)]
+#![no_main]
+#![no_std]
+
+extern crate panic_halt;
+
+use cortex_m_rt::{entry, exception};
+use spin::Mutex; // spin = "0.5.0"
+
+static TO: Mutex<&'static (dyn Foo + Sync)> = Mutex::new(&Bar);
+
+#[entry]
+#[inline(never)]
+fn main() -> ! {
+    // trait object dispatch
+    (*TO.lock()).foo();
+
+    Quux.foo();
+
+    loop {}
+}
+
+trait Foo {
+    // default implementation of this method
+    fn foo(&self) -> bool {
+        // spill variables onto the stack
+        unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
+
+        false
+    }
+}
+
+struct Bar;
+
+// uses the default method implementation
+impl Foo for Bar {}
+
+struct Baz;
+
+impl Foo for Baz {
+    // overrides the default method
+    fn foo(&self) -> bool {
+        unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
+
+        true
+    }
+}
+
+struct Quux;
+
+impl Quux {
+    // not a trait method!
+    #[inline(never)]
+    fn foo(&self) -> bool {
+        // NOTE(asm!) side effect to preserve function calls to this method
+        unsafe { asm!("NOP" : : : : "volatile") }
+
+        false
+    }
+}
+
+// this handler can change the trait object at any time
+#[exception]
+fn SysTick() {
+    *TO.lock() = &Baz;
+}
+```
+
+The tool produces the following call graph:
+
+[![Dynamic dispatch](assets/to.png)](https://japaric.github.io/cargo-call-stack/to.svg)
+
+Here `i1 ({}*)` denotes dynamic dispatch of a method with (Rust) signature
+`fn(&[mut] self) -> bool`. The dynamic dispatch can invoke either `Bar.foo`,
+which boils down to the default method implementation (`app::Foo::foo` in the
+graph), or `Baz.foo` (`<app::Baz as app::Foo>::foo` in the graph). In this case
+the tool does *not* a draw an edge between `i1 ({}*)` and `Quux::foo`, whose
+signature is also `fn(&self) -> bool`, so the call graph is accurate.
+
+If you are wondering why we use LLVM notation for the function signature of the
+trait method: that's because the tool operates on LLVM-IR where there's no
+`bool` primitive and most of Rust's type information has been erased.
+
+## Function pointers
+
+In *some* cases the tool can produce correct call graphs for programs that
+invoke functions via pointers (e.g. `fn()`). Here's an example:
+
+``` rust
+#![feature(asm)]
+#![no_main]
+#![no_std]
+
+extern crate panic_halt;
+
+use core::sync::atomic::{AtomicPtr, Ordering};
+
+use cortex_m_rt::{entry, exception};
+
+static F: AtomicPtr<fn() -> bool> = AtomicPtr::new(foo as *mut _);
+
+#[inline(never)]
+#[entry]
+fn main() -> ! {
+    if let Some(f) = unsafe { F.load(Ordering::Relaxed).as_ref() } {
+        // call via function pointer
+        f();
+    }
+
+    loop {}
+}
+
+fn foo() -> bool {
+    // spill variables onto the stack
+    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
+
+    false
+}
+
+fn bar() -> bool {
+    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
+
+    true
+}
+
+// this handler can change the function pointer at any time
+#[exception]
+fn SysTick() {
+    F.store(bar as *mut _, Ordering::Relaxed);
+}
+```
+
+The tool produces the following call graph:
+
+[![Function pointers](assets/fn.png)](https://japaric.github.io/cargo-call-stack/fn.svg)
+
+The node `i1 ()*` represents a call via function pointer -- the LLVM type `i1
+()*` is equivalent to Rust's `fn() -> bool`. This indirect call could invoke
+`foo` or `bar`, the only functions with signature `fn() -> bool`.
+
+## Known limitations
+
+### Lossy type information
+
+To reason about indirect function calls the tool uses the type information
+available in the LLVM-IR of the program. This information does not exactly match
+Rust's type information and leads to mislabeling of functions. For example,
+consider this program:
+
+``` rust
+#![feature(asm)]
+#![no_main]
+#![no_std]
+
+extern crate panic_halt;
+
+use core::{
+    ptr,
+    sync::atomic::{AtomicPtr, Ordering},
+};
+
+use cortex_m_rt::{entry, exception};
+
+static F: AtomicPtr<fn() -> u32> = AtomicPtr::new(foo as *mut _);
+
+#[inline(never)]
+#[entry]
+fn main() -> ! {
+    if let Some(f) = unsafe { F.load(Ordering::Relaxed).as_ref() } {
+        // call via function pointer
+        f();
+    }
+
+    let x = baz();
+    unsafe {
+        // NOTE(volatile) used to preserve the return value of `baz`
+        ptr::read_volatile(&x);
+    }
+
+    loop {}
+}
+
+// this handler can change the function pointer at any time
+#[exception]
+fn SysTick() {
+    F.store(bar as *mut _, Ordering::Relaxed);
+}
+
+fn foo() -> u32 {
+    // spill variables onto the stack
+    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
+
+    0
+}
+
+fn bar() -> u32 {
+    1
+}
+
+#[inline(never)]
+fn baz() -> i32 {
+    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
+
+    F.load(Ordering::Relaxed) as usize as i32
+}
+```
+
+The tool produces the following call graph:
+
+[![Lossy types](assets/lossy.png)](https://japaric.github.io/cargo-call-stack/lossy.svg)
+
+Note that the node that represents the indirect function call has type `i32 ()*`
+(`fn() -> i32`), not `u32 ()*`. The reason is that there's no `u32` type in
+LLVM, there are only signed integers. This leads the tool to wrongly add an edge
+between `i32 ()*` and `baz`. If the tool had Rust's type information then this
+edge would have not been added.
+
+### No information on compiler intrinsics
+
+Due to how LLVM works all compiler intrinsics, software implementations of
+functionality not available as instructions in the target ISA (e.g.
+multiplication of 64-bit integers), need to be a separate object file that gets
+linked into the final binary.
+
+In Rust all these compiler intrinsics are packed in the
+`libcompiler_builtins` rlib. This rlib is distributed via `rustup` and always
+compiled without `-Z emit-stack-sizes` so it contains no stack usage
+information. Furthermore, the metadata in the `compiler-builtins` crate is never
+accessed when compiling a crate so no LLVM-IR is ever produced from it thus the
+tool has no information about the call dependencies of the compiler intrinsics.
+
+All these unknowns are currently papered over in the tool using "ad hoc
+knowledge". For example, we now that `__aeabi_memclr4` invokes
+`__aeabi_memset4` and that `__aeabi_memset4` uses 8 bytes of stack on
+`thumbv7m-none-eabi` as of Rust 1.33.0 so the tool uses this information when
+building the call graph. Obviously, this approach doesn't scale and this ad hoc
+knowledge is likely to get outdated as compiler intrinsics are modified (to
+optimize them) over time.
+
+### Miscellaneous
+
+The tool assumes that *all* instances of inline assembly (`asm!`) use zero bytes
+of stack. This is not always the case so the tool prints a warning message
+for each `asm!` string it encounters.
+
+The tool assumes that branching (calling a function) does not use the stack
+(i.e. no register is pushed onto the stack when branching). This may not be true
+on *all* the architectures that Rust supports -- it is true on ARM Cortex-M.
+
+The tool only supports ELF binaries because `-Z emit-stack-sizes` only supports
+the ELF format.
 
 ## License
 
