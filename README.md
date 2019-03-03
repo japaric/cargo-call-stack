@@ -2,6 +2,12 @@
 
 > Static, whole program stack analysis
 
+<p align="center">
+  <a href="https://japaric.github.io/cargo-call-stack/cycle.svg">
+    <img alt="Call graph with a cycle" src="assets/cycle.png">
+  </a>
+</p>
+
 **HEADS UP**: This tool relies on an experimental feature (`-Z stack-sizes`)
 and implementation details of `rustc` (like symbol mangling) and could stop
 working with a nightly toolchain at any time. You have been warned!
