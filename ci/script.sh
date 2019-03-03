@@ -1,20 +1,21 @@
 set -euxo pipefail
 
 main() {
-    # it compiles and passes the parser test suite
-    cargo test
-
-    # it can analyze "Hello, world!"
-    cargo install --path . -f --debug
-
     if [ $TRAVIS_RUST_VERSION = nightly ]; then
         local td=$(mktemp -d)
+
+        # it can analyze "Hello, world!"
+        cargo install --path . -f --debug
+
         pushd $td
         cargo init --name hello
         cargo call-stack --bin hello > /dev/null
         popd
 
         rm -rf $td
+    else
+        # it compiles and passes the parser test suite
+        cargo test
     fi
 }
 
