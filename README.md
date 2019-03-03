@@ -149,7 +149,11 @@ warning: assuming that asm!("") does *not* use the stack
 warning: assuming that asm!("") does *not* use the stack
 ```
 
-[![Filtered call graph](assets/filtered.png)](https://japaric.github.io/cargo-call-stack/filtered.svg)
+<p align="center">
+  <a href="https://japaric.github.io/cargo-call-stack/filtered.svg">
+    <img alt="Filtered call graph" src="assets/filtered.png">
+  </a>
+</p>
 
 Notice that `SysTick` and `baz` don't appear in this call graph since they are
 not reachable from `main`.
@@ -219,7 +223,11 @@ fn SysTick() {
 
 It produces the following call graph:
 
-[![Call graph with a cycle](assets/cycle.png)](https://japaric.github.io/cargo-call-stack/cycle.svg)
+<p align="center">
+  <a href="https://japaric.github.io/cargo-call-stack/cycle.svg">
+    <img alt="Call graph with a cycle" src="assets/cycle.png">
+  </a>
+</p>
 
 The functions `foo`, `bar` and `baz` use zero stack space thus the cycle formed
 by them also uses zero stack space. In this particular case the maximum stack
@@ -335,7 +343,7 @@ $5 = (void *) 0x20005000
 
 In *some* cases the tool can produce correct call graphs for programs that use
 trait objects -- more details about where and how it fails in the ["Known
-limitations"][#known-limitations] section. Here's an example:
+limitations"](#known-limitations) section. Here's an example:
 
 ``` rust
 #![feature(asm)]
@@ -408,7 +416,11 @@ fn SysTick() {
 
 The tool produces the following call graph:
 
-[![Dynamic dispatch](assets/to.png)](https://japaric.github.io/cargo-call-stack/to.svg)
+<p align="center">
+  <a href="https://japaric.github.io/cargo-call-stack/to.svg">
+    <img alt="Dynamic dispatch" src="assets/to.png">
+  </a>
+</p>
 
 Here `i1 ({}*)` denotes dynamic dispatch of a method with (Rust) signature
 `fn(&[mut] self) -> bool`. The dynamic dispatch can invoke either `Bar.foo`,
@@ -472,7 +484,11 @@ fn SysTick() {
 
 The tool produces the following call graph:
 
-[![Function pointers](assets/fn.png)](https://japaric.github.io/cargo-call-stack/fn.svg)
+<p align="center">
+  <a href="https://japaric.github.io/cargo-call-stack/fn.svg">
+    <img alt="Function pointers" src="assets/fn.png">
+  </a>
+</p>
 
 The node `i1 ()*` represents a call via function pointer -- the LLVM type `i1
 ()*` is equivalent to Rust's `fn() -> bool`. This indirect call could invoke
@@ -547,7 +563,11 @@ fn baz() -> i32 {
 
 The tool produces the following call graph:
 
-[![Lossy types](assets/lossy.png)](https://japaric.github.io/cargo-call-stack/lossy.svg)
+<p align="center">
+  <a href="https://japaric.github.io/cargo-call-stack/lossy.svg">
+    <img alt="Lossy types" src="assets/lossy.png">
+  </a>
+</p>
 
 Note that the node that represents the indirect function call has type `i32 ()*`
 (`fn() -> i32`), not `u32 ()*`. The reason is that there's no `u32` type in
