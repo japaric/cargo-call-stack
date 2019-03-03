@@ -1,25 +1,29 @@
+// #![deny(warnings)]
+
 use std::{
     borrow::Cow,
-    cmp::Ordering,
-    collections::{BTreeMap, HashMap},
+    cmp,
+    collections::{BTreeMap, HashMap, HashSet},
     env, fmt, fs, ops,
+    path::PathBuf,
     process::{self, Command},
     time::SystemTime,
 };
 
 use cargo_project::{Artifact, Profile, Project};
-use clap::{App, Arg};
+use clap::{crate_authors, crate_version, App, Arg};
 use either::Either;
+use env_logger::{Builder, Env};
+use log::{error, warn};
 use petgraph::{
     algo,
     dot::{Config, Dot},
-    graph::DiGraph,
-    visit::{Reversed, Topo},
+    graph::{DiGraph, NodeIndex},
+    visit::{Dfs, Reversed, Topo},
     Direction,
 };
-use std::path::PathBuf;
 
-use crate::ir::Call;
+use crate::ir::{FnSig, Item, Stmt, Type};
 
 mod ir;
 
@@ -33,10 +37,15 @@ fn main() -> Result<(), failure::Error> {
     }
 }
 
+// Version we analyzed to extract some ad-hoc information
+const VERS: &str = "1.33.0"; // compiler-builtins = "0.1.4"
+
 fn run() -> Result<i32, failure::Error> {
+    Builder::from_env(Env::default().default_filter_or("warn")).init();
+
     let matches = App::new("cargo-call-stack")
-        .version("1.0")
-        .author("Jorge Aparicio <jorge@japaric.io>, Per Lindgren <per.lindgren@ltu.se>")
+        .version(crate_version!())
+        .author(crate_authors!())
         .about("Generate a call graph and perform whole program stack usage analysis")
         // as this is used as a Cargo subcommand the first argument will be the name of the binary
         // we ignore this argument
@@ -81,6 +90,9 @@ fn run() -> Result<i32, failure::Error> {
                 .takes_value(false)
                 .help("Activate all available features"),
         )
+        .arg(
+            Arg::with_name("START").help("consider only the call graph that starts from this node"),
+        )
         .get_matches();
     let is_example = matches.is_present("example");
     let is_binary = matches.is_present("bin");
@@ -95,7 +107,7 @@ fn run() -> Result<i32, failure::Error> {
         _ => {
             return Err(failure::err_msg(
                 "Please specify either --example <NAME> or --bin <NAME>.",
-            ))
+            ));
         }
     }
 
@@ -160,18 +172,7 @@ fn run() -> Result<i32, failure::Error> {
         project.path(Artifact::Bin(file), profile, target_flag, &host)?
     };
 
-    // extract stack size information
     let elf = fs::read(&path)?;
-    let stack_sizes: Vec<_> = match stack_sizes::analyze(&elf)? {
-        Either::Left(fs) => fs
-            .into_iter()
-            .map(|f| (f.names().to_owned(), f.stack()))
-            .collect(),
-        Either::Right(fs) => fs
-            .into_iter()
-            .map(|f| (f.names().to_owned(), f.stack()))
-            .collect(),
-    };
 
     // load llvm-ir file
     let mut ll = None;
@@ -210,134 +211,695 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
-    let defines = crate::ir::parse(&fs::read_to_string(ll.expect("unreachable"))?)?;
+    let ll = fs::read_to_string(ll.expect("unreachable"))?;
+    let items = crate::ir::parse(&ll)?;
+    let mut defines = HashMap::new();
+    let mut declares = HashMap::new();
+    for item in items {
+        match item {
+            Item::Define(def) => {
+                defines.insert(def.name, def);
+            }
+
+            Item::Declare(decl) => {
+                declares.insert(decl.name, decl);
+            }
+
+            _ => {}
+        }
+    }
+
+    // extract stack size information
+    let stack_sizes: Vec<_> = match stack_sizes::analyze(&elf)? {
+        Either::Left(fs) => fs
+            .into_iter()
+            .map(|f| {
+                if f.address().is_none() {
+                    // external symbols may contain a version string (e.g. `@@GLIBC_2.2.5`) that must
+                    // be removed
+                    (
+                        f.names()
+                            .iter()
+                            .map(|name| {
+                                if name.contains("@@") {
+                                    name.rsplit("@@").nth(1).unwrap()
+                                } else {
+                                    name
+                                }
+                            })
+                            .collect(),
+                        f.stack(),
+                    )
+                } else {
+                    (f.names().to_owned(), f.stack())
+                }
+            })
+            .collect(),
+        Either::Right(fs) => fs
+            .into_iter()
+            .map(|f| {
+                if f.address().is_none() {
+                    // external symbols may contain a version string (e.g. `@@GLIBC_2.2.5`) that must
+                    // be removed
+                    (
+                        f.names()
+                            .iter()
+                            .map(|name| {
+                                if name.contains("@@") {
+                                    name.rsplit("@@").nth(1).unwrap()
+                                } else {
+                                    name
+                                }
+                            })
+                            .collect(),
+                        f.stack(),
+                    )
+                } else {
+                    (f.names().to_owned(), f.stack())
+                }
+            })
+            .collect(),
+    };
 
     let mut g = DiGraph::<Node, ()>::new();
     let mut indices = BTreeMap::<Cow<str>, _>::new();
+
+    let mut indirects: HashMap<FnSig, Indirect> = HashMap::new();
+    let mut dynamics: HashMap<FnSig, Dynamic> = HashMap::new();
 
     // Some functions may be aliased; we map aliases to a single name. For example, if `foo`,
     // `bar` and `baz` all have the same address then this maps contains: `foo -> foo`, `bar -> foo`
     // and `baz -> foo`.
     let mut aliases = HashMap::new();
+    // whether a symbol name is ambiguous after removing the hash
+    let mut ambiguous = HashMap::<String, u32>::new();
+
+    // we do a first pass over all the definitions to collect methods in `impl Trait for Type`
+    let mut default_methods = HashSet::new();
+    for name in defines.keys() {
+        let demangled = rustc_demangle::demangle(name).to_string();
+
+        // `<crate::module::Type as crate::module::Trait>::method::hdeadbeef`
+        if demangled.starts_with("<") {
+            if let Some(rhs) = demangled.splitn(2, " as ").nth(1) {
+                // rhs = `crate::module::Trait>::method::hdeadbeef`
+                let mut parts = rhs.splitn(2, ">::");
+
+                if let (Some(trait_), Some(rhs)) = (parts.next(), parts.next()) {
+                    // trait_ = `crate::module::Trait`, rhs = `method::hdeadbeef`
+
+                    if let Some(method) = dehash(rhs) {
+                        default_methods.insert(format!("{}::{}", trait_, method));
+                    }
+                }
+            }
+        }
+    }
 
     // add all real nodes
-    for (names, stack) in stack_sizes {
-        debug_assert!(!names.is_empty());
-
+    let mut has_stack_usage_info = false;
+    let target = project.target().or(target_flag);
+    let mut has_untyped_symbols = false;
+    for (names, mut stack) in stack_sizes {
         let canonical_name = names[0];
         for name in names {
             aliases.insert(name, canonical_name);
         }
 
+        if stack.is_none() {
+            // here we inject some target specific information we get from analyzing
+            // `libcompiler_builtins.rlib`
+
+            let ad_hoc = match target.unwrap_or("") {
+                "thumbv6m-none-eabi" => match canonical_name {
+                    "__aeabi_memcpy" | "__aeabi_memset" | "__aeabi_memclr" | "__aeabi_memclr4" => {
+                        stack = Some(0);
+                        true
+                    }
+
+                    "__aeabi_memcpy4" | "__aeabi_memset4" => {
+                        stack = Some(8);
+                        true
+                    }
+
+                    "memcmp" => {
+                        stack = Some(16);
+                        true
+                    }
+
+                    _ => false,
+                },
+
+                "thumbv7m-none-eabi" | "thumbv7em-none-eabi" | "thumbv7em-none-eabihf" => {
+                    match canonical_name {
+                        "__aeabi_memclr" | "__aeabi_memclr4" => {
+                            stack = Some(0);
+                            true
+                        }
+
+                        "__aeabi_memcpy" | "__aeabi_memcpy4" | "memcmp" => {
+                            stack = Some(16);
+                            true
+                        }
+
+                        "__aeabi_memset" | "__aeabi_memset4" => {
+                            stack = Some(8);
+                            true
+                        }
+
+                        _ => false,
+                    }
+                }
+
+                _ => false,
+            };
+
+            if ad_hoc {
+                warn!(
+                    "ad-hoc: injecting stack usage information for `{}` (last checked: Rust {})",
+                    canonical_name, VERS
+                );
+            } else {
+                warn!("no stack usage information for `{}`", canonical_name);
+            }
+        } else {
+            has_stack_usage_info = true;
+        }
+
+        let demangled = rustc_demangle::demangle(canonical_name).to_string();
+        if let Some(dehashed) = dehash(&demangled) {
+            *ambiguous.entry(dehashed.to_string()).or_insert(0) += 1;
+        }
+
         let idx = g.add_node(Node(canonical_name, stack));
         indices.insert(canonical_name.into(), idx);
 
-        let demangled = rustc_demangle::demangle(canonical_name).to_string();
+        // trait methods look like `<crate::module::Type as crate::module::Trait>::method::h$hash`
+        // default trait methods look like `crate::module::Trait::method::h$hash`
+        let is_trait_method = demangled.starts_with("<") && demangled.contains(" as ") || {
+            dehash(&demangled)
+                .map(|path| default_methods.contains(path))
+                .unwrap_or(false)
+        };
 
-        if demangled.starts_with('<') {
-            // this is a trait method implementation
-            // the syntax is `<$type as $crate::$trait>::$method::$hash`
-            let mut parts = demangled[1..].rsplitn(2, ">::");
-            let method_hash = parts.next().expect("unreachable");
-            let type_as_trait = parts.next().expect("unreachable");
+        if let Some(def) = defines.get(canonical_name) {
+            let is_object_safe = is_trait_method && {
+                match def.sig.inputs.first().as_ref() {
+                    Some(Type::Pointer(ty)) => match **ty {
+                        // XXX can the receiver be a *specific* function? (e.g. `fn() {foo}`)
+                        Type::Fn(_) => false,
 
-            let mut parts = type_as_trait.split(" as ");
-            let path = parts.nth(1).expect(method_hash);
-
-            // we remove the preceding $crate because our call-site metadata doesn't include it
-            let mut parts = path.splitn(2, "::");
-            let trait_name = parts.nth(1).expect("unreachable");
-
-            let mut parts = method_hash.split("::");
-            let method = parts.nth(0).expect("unreachable");
-
-            let to = format!("dyn {}::{}", trait_name, method);
-
-            let to = if let Some(to) = indices.get(&*to) {
-                *to
-            } else {
-                let idx = g.add_node(Node(to.clone(), Some(0)));
-                indices.insert(to.into(), idx);
-                idx
+                        _ => true,
+                    },
+                    _ => false,
+                }
             };
 
-            g.add_edge(to, idx, ());
+            if is_object_safe {
+                let mut sig = def.sig.clone();
+
+                // erase the type of the reciver
+                sig.inputs[0] = Type::erased();
+
+                dynamics.entry(sig).or_default().callees.insert(idx);
+            } else {
+                indirects
+                    .entry(def.sig.clone())
+                    .or_default()
+                    .callees
+                    .insert(idx);
+            }
+        } else if let Some(sig) = declares
+            .get(canonical_name)
+            .and_then(|decl| decl.sig.clone())
+        {
+            // sanity check (?)
+            assert!(!is_trait_method, "BUG: undefined trait method");
+
+            indirects.entry(sig).or_default().callees.insert(idx);
+        } else {
+            // from `compiler-builtins`
+            match canonical_name {
+                "__aeabi_memcpy" | "__aeabi_memcpy4" => {
+                    let sig = FnSig {
+                        inputs: vec![
+                            Type::Pointer(Box::new(Type::Integer(8))),
+                            Type::Pointer(Box::new(Type::Integer(8))),
+                            Type::Integer(32), // ARM has 32-bit pointers
+                        ],
+                        output: None,
+                    };
+                    indirects.entry(sig).or_default().callees.insert(idx);
+                }
+
+                "__aeabi_memclr" | "__aeabi_memclr4" => {
+                    let sig = FnSig {
+                        inputs: vec![
+                            Type::Pointer(Box::new(Type::Integer(8))),
+                            Type::Integer(32), // ARM has 32-bit pointers
+                        ],
+                        output: None,
+                    };
+                    indirects.entry(sig).or_default().callees.insert(idx);
+                }
+
+                "__aeabi_memset" | "__aeabi_memset4" => {
+                    let sig = FnSig {
+                        inputs: vec![
+                            Type::Pointer(Box::new(Type::Integer(8))),
+                            Type::Integer(32), // ARM has 32-bit pointers
+                            Type::Integer(32),
+                        ],
+                        output: None,
+                    };
+                    indirects.entry(sig).or_default().callees.insert(idx);
+                }
+
+                _ => {
+                    has_untyped_symbols = true;
+                    warn!("no type information for `{}`", canonical_name);
+                }
+            }
         }
     }
 
     // add edges
-    for define in &defines {
-        let caller = if let Some(canonical_name) = aliases.get(&define.name()) {
+    for define in defines.values() {
+        let caller = if let Some(canonical_name) = aliases.get(&define.name) {
             indices[*canonical_name]
         } else {
             // this symbol was GC-ed by the linker, skip
             continue;
         };
 
-        for call in define.calls() {
-            match call {
-                Call::Asm { expr } => {
-                    eprintln!(
-                        "warning: assuming that asm!(\"{}\") does *not* use the stack",
-                        expr
-                    );
+        // to avoid inserting multiple edges between a caller and the same callee
+        let mut func_seen = HashSet::new();
+        // to avoid printing several warnings about the same thing
+        let mut asm_seen = HashSet::new();
+        let mut llvm_seen = HashSet::new();
+        for stmt in &define.stmts {
+            match stmt {
+                Stmt::Asm(expr) => {
+                    if !asm_seen.contains(expr) {
+                        asm_seen.insert(expr);
+                        warn!("assuming that asm!(\"{}\") does *not* use the stack", expr);
+                    }
                 }
-                Call::Direct { callee } => {
-                    let callee = if callee.starts_with("llvm.memcpy") {
-                        // XXX we should also consider `aeabi_memcpy{,4,8}` here
-                        if aliases.contains_key("memcpy") {
-                            "memcpy"
-                        } else {
-                            // inlined `memcpy`
-                            continue;
-                        }
+
+                // this is basically `(mem::transmute<*const u8, fn()>(&__some_symbol))()`
+                Stmt::BitcastCall(sym) => {
+                    // XXX we have some type information for this call but it's unclear if we should
+                    // try harder -- does this ever occur in pure Rust programs?
+
+                    let callee = if let Some(idx) = indices.get(*sym) {
+                        *idx
                     } else {
-                        callee
+                        warn!("no stack information for `{}`", sym);
+
+                        let idx = g.add_node(Node(*sym, None));
+                        indices.insert(Cow::Borrowed(*sym), idx);
+                        idx
                     };
 
-                    let callee = indices[*aliases.get(callee).unwrap_or_else(|| {
-                        panic!("bug? {} does not appear to be a valid symbol", callee);
-                    })];
-
                     g.add_edge(caller, callee, ());
                 }
-                Call::Fn => {
-                    // create a fictitious node for each indirect call
-                    let external = g.add_node(Node("_: fn(..) -> _", None));
 
-                    g.add_edge(caller, external, ());
-                }
-                Call::Trait { name, method } => {
-                    // create a fictitious node for each trait object dispatch
-                    let to = format!("dyn {}::{}", name, method);
+                Stmt::DirectCall(func) => {
+                    match *func {
+                        // no-op / debug-info
+                        "llvm.dbg.value" => continue,
+                        "llvm.dbg.declare" => continue,
 
-                    let callee = indices[&*to];
-                    g.add_edge(caller, callee, ());
+                        // no-op / compiler-hint
+                        "llvm.assume" => continue,
+
+                        // lowers to a single instruction
+                        "llvm.trap" => continue,
+
+                        _ => {}
+                    }
+
+                    // no-op / compiler-hint
+                    if func.starts_with("llvm.lifetime.start")
+                        || func.starts_with("llvm.lifetime.end")
+                    {
+                        continue;
+                    }
+
+                    let mut call = |callee, name| {
+                        if !func_seen.contains(name) {
+                            g.add_edge(caller, callee, ());
+                            func_seen.insert(name);
+                        }
+                    };
+
+                    // TODO? consider alignment and `value` argument to only include one edge
+                    // TODO? consider the `len` argument to elide the call to `*mem*`
+                    if func.starts_with("llvm.memcpy.") {
+                        if let Some(callee) = indices.get("memcpy") {
+                            call(*callee, "memcpy");
+                        }
+
+                        if let Some(callee) = indices.get("__aeabi_memcpy") {
+                            call(*callee, "__aeabi_memcpy");
+                        }
+
+                        if let Some(callee) = indices.get("__aeabi_memcpy4") {
+                            call(*callee, "__aeabi_memcpy4");
+                        }
+
+                        continue;
+                    }
+
+                    // TODO? consider alignment and `value` argument to only include one edge
+                    // TODO? consider the `len` argument to elide the call to `*mem*`
+                    if func.starts_with("llvm.memset.") || func.starts_with("llvm.memmove.") {
+                        if let Some(callee) = indices.get("memset") {
+                            call(*callee, "memset");
+                        }
+
+                        if let Some(callee) = indices.get("__aeabi_memset") {
+                            call(*callee, "__aeabi_memset");
+                        }
+
+                        if let Some(callee) = indices.get("__aeabi_memset4") {
+                            call(*callee, "__aeabi_memset4");
+                        }
+
+                        if let Some(callee) = indices.get("memclr") {
+                            call(*callee, "memclr");
+                        }
+
+                        if let Some(callee) = indices.get("__aeabi_memclr") {
+                            call(*callee, "__aeabi_memclr");
+                        }
+
+                        if let Some(callee) = indices.get("__aeabi_memclr4") {
+                            call(*callee, "__aeabi_memclr4");
+                        }
+
+                        continue;
+                    }
+
+                    // XXX unclear whether these produce library calls on some platforms or not
+                    if func.starts_with("llvm.bswap.")
+                        | func.starts_with("llvm.ctlz.")
+                        | func.starts_with("llvm.uadd.with.overflow.")
+                        | func.starts_with("llvm.umul.with.overflow.")
+                    {
+                        if !llvm_seen.contains(func) {
+                            llvm_seen.insert(func);
+                            warn!("assuming that `{}` directly lowers to machine code", func);
+                        }
+
+                        continue;
+                    }
+
+                    assert!(
+                        !func.starts_with("llvm."),
+                        "BUG: unhandled llvm intrinsic: {}",
+                        func
+                    );
+
+                    // use canonical name
+                    let func = aliases
+                        .get(func)
+                        .unwrap_or_else(|| panic!("BUG: callee `{}` is unknown", func));
+
+                    let callee = indices[*func];
+
+                    if !func_seen.contains(func) {
+                        func_seen.insert(func);
+                        g.add_edge(caller, callee, ());
+                    }
                 }
+
+                Stmt::IndirectCall(sig) => {
+                    if sig
+                        .inputs
+                        .first()
+                        .map(|ty| ty.has_been_erased())
+                        .unwrap_or(false)
+                    {
+                        // dynamic dispatch
+                        let dynamic = dynamics.entry(sig.clone()).or_default();
+
+                        dynamic.called = true;
+                        dynamic.callers.insert(caller);
+                    } else {
+                        let indirect = indirects.entry(sig.clone()).or_default();
+
+                        indirect.called = true;
+                        indirect.callers.insert(caller);
+                    }
+                }
+
+                Stmt::Label | Stmt::Comment | Stmt::Other => {}
             }
         }
     }
 
-    // TODO handle this case instead of panicking
-    assert!(
-        !algo::is_cyclic_directed(&g),
-        "call graphs that contain cycles are currently not supported"
-    );
+    // ad-hoc edges
+    // we know this from analyzing `compiler-builtins` (we never have access to its llvm-ir)
+    match target.unwrap_or("") {
+        "thumbv6m-none-eabi"
+        | "thumbv7m-none-eabi"
+        | "thumbv7em-none-eabi"
+        | "thumbv7em-none-eabihf" => {
+            let mut branches_to = |caller, callee| {
+                if let Some(icaller) = indices.get(caller) {
+                    if let Some(icallee) = indices.get(callee) {
+                        g.add_edge(*icaller, *icallee, ());
 
-    // compute max stack usage
-    let mut topo = Topo::new(Reversed(&g));
-    while let Some(node) = topo.next(Reversed(&g)) {
-        debug_assert!(g[node].max.is_none());
+                        warn!(
+                            "ad-hoc: `{}` calls `{}` (last checked: Rust {})",
+                            caller, callee, VERS
+                        )
+                    }
+                }
+            };
 
-        let neighbors_max = g
-            .neighbors_directed(node, Direction::Outgoing)
-            .map(|neighbor| g[neighbor].max.expect("unreachable"))
-            .max();
+            branches_to("__aeabi_memclr", "__aeabi_memset");
+            branches_to("__aeabi_memclr4", "__aeabi_memset4");
+        }
+        _ => {}
+    }
 
-        if let Some(max) = neighbors_max {
-            g[node].max = Some(max + g[node].local);
+    // add fictitious nodes for indirect function calls
+    if has_untyped_symbols {
+        warn!(
+            "the program contains untyped, external symbols (e.g. linked in from binary blobs); \
+             indirect function calls can not be bounded"
+        );
+    }
+
+    for (sig, indirect) in indirects {
+        if !indirect.called {
+            continue;
+        }
+
+        let mut name = sig.to_string();
+        // append '*' to denote that this is a function pointer
+        name.push('*');
+
+        let call = g.add_node(Node(name.clone(), Some(0)));
+
+        for caller in &indirect.callers {
+            g.add_edge(*caller, call, ());
+        }
+
+        if has_untyped_symbols {
+            // add an edge between this and a potential extern / untyped symbol
+            let extern_sym = g.add_node(Node("?", None));
+            g.add_edge(call, extern_sym, ());
         } else {
-            g[node].max = Some(g[node].local.into());
+            if indirect.callees.is_empty() {
+                error!("BUG? no callees for `{}`", name);
+            }
+        }
+
+        for callee in &indirect.callees {
+            g.add_edge(call, *callee, ());
+        }
+    }
+
+    // add fictitious nodes for dynamic dispatch
+    for (sig, dynamic) in dynamics {
+        if !dynamic.called {
+            continue;
+        }
+
+        let name = sig.to_string();
+
+        if dynamic.callees.is_empty() {
+            error!("BUG? no callees for `{}`", name);
+        }
+
+        let call = g.add_node(Node(name, Some(0)));
+        for caller in &dynamic.callers {
+            g.add_edge(*caller, call, ());
+        }
+
+        for callee in &dynamic.callees {
+            g.add_edge(call, *callee, ());
+        }
+    }
+
+    // filter the call graph
+    if let Some(start) = matches.value_of("START") {
+        let start = indices.get(start).cloned().or_else(|| {
+            let start_ = start.to_owned() + "::h";
+            let hits = indices
+                .keys()
+                .filter_map(|key| {
+                    if rustc_demangle::demangle(key)
+                        .to_string()
+                        .starts_with(&start_)
+                    {
+                        Some(key)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            if hits.len() > 1 {
+                error!("multiple matches for `{}`: {:?}", start, hits);
+                None
+            } else {
+                hits.first().map(|key| indices[*key])
+            }
+        });
+
+        // TODO do partial match / ignore trailing hash
+        if let Some(start) = start {
+            // create a new graph that only contains nodes reachable from `start`
+            let mut g2 = DiGraph::<Node, ()>::new();
+
+            // maps `g`'s `NodeIndex`-es to `g2`'s `NodeIndex`-es
+            let mut one2two = BTreeMap::new();
+
+            let mut dfs = Dfs::new(&g, start);
+            while let Some(caller1) = dfs.next(&g) {
+                let caller2 = if let Some(i2) = one2two.get(&caller1) {
+                    *i2
+                } else {
+                    let i2 = g2.add_node(g[caller1].clone());
+                    one2two.insert(caller1, i2);
+                    i2
+                };
+
+                let mut callees = g.neighbors(caller1).detach();
+                while let Some((_, callee1)) = callees.next(&g) {
+                    let callee2 = if let Some(i2) = one2two.get(&callee1) {
+                        *i2
+                    } else {
+                        let i2 = g2.add_node(g[callee1].clone());
+                        one2two.insert(callee1, i2);
+                        i2
+                    };
+
+                    g2.add_edge(caller2, callee2, ());
+                }
+            }
+
+            // replace the old graph
+            g = g2;
+
+            // invalidate `indices` to prevent misuse
+            indices.clear();
+        } else {
+            error!("start point not found; the graph will not be filtered")
+        }
+    }
+
+    if !has_stack_usage_info {
+        error!("The graph has zero stack usage information; skipping max stack usage analysis");
+    } else if algo::is_cyclic_directed(&g) {
+        let sccs = algo::kosaraju_scc(&g);
+
+        // iterate over SCCs (Strongly Connected Components) in reverse topological order
+        for scc in &sccs {
+            let first = scc[0];
+
+            let is_a_cycle = scc.len() > 1
+                || g.neighbors_directed(first, Direction::Outgoing)
+                    .any(|n| n == first);
+
+            if is_a_cycle {
+                let mut scc_local =
+                    max_of(scc.iter().map(|node| g[*node].local.into())).expect("UNREACHABLE");
+
+                // the cumulative stack usage is only exact when all nodes do *not* use the stack
+                if let Max::Exact(n) = scc_local {
+                    if n != 0 {
+                        scc_local = Max::LowerBound(n)
+                    }
+                }
+
+                let neighbors_max = max_of(scc.iter().flat_map(|inode| {
+                    g.neighbors_directed(*inode, Direction::Outgoing)
+                        .filter_map(|neighbor| {
+                            if scc.contains(&neighbor) {
+                                // we only care about the neighbors of the SCC
+                                None
+                            } else {
+                                Some(g[neighbor].max.expect("UNREACHABLE"))
+                            }
+                        })
+                }));
+
+                for inode in scc {
+                    let node = &mut g[*inode];
+                    if let Some(max) = neighbors_max {
+                        node.max = Some(max + scc_local);
+                    } else {
+                        node.max = Some(scc_local);
+                    }
+                }
+            } else {
+                let inode = first;
+
+                let neighbors_max = max_of(
+                    g.neighbors_directed(inode, Direction::Outgoing)
+                        .map(|neighbor| g[neighbor].max.expect("UNREACHABLE")),
+                );
+
+                let node = &mut g[inode];
+                if let Some(max) = neighbors_max {
+                    node.max = Some(max + node.local);
+                } else {
+                    node.max = Some(node.local.into());
+                }
+            }
+        }
+    } else {
+        // compute max stack usage
+        let mut topo = Topo::new(Reversed(&g));
+        while let Some(node) = topo.next(Reversed(&g)) {
+            debug_assert!(g[node].max.is_none());
+
+            let neighbors_max = max_of(
+                g.neighbors_directed(node, Direction::Outgoing)
+                    .map(|neighbor| g[neighbor].max.expect("UNREACHABLE")),
+            );
+
+            if let Some(max) = neighbors_max {
+                g[node].max = Some(max + g[node].local);
+            } else {
+                g[node].max = Some(g[node].local.into());
+            }
+        }
+    }
+
+    // here we try to shorten the name of the symbol if it doesn't result in ambiguity
+    for node in g.node_weights_mut() {
+        let demangled = rustc_demangle::demangle(&node.name).to_string();
+
+        if let Some(dehashed) = dehash(&demangled) {
+            if ambiguous[dehashed] == 1 {
+                node.name = Cow::Owned(dehashed.to_owned());
+            }
         }
     }
 
@@ -346,6 +908,7 @@ fn run() -> Result<i32, failure::Error> {
     Ok(0)
 }
 
+#[derive(Clone)]
 struct Node<'a> {
     name: Cow<'a, str>,
     local: Local,
@@ -429,20 +992,29 @@ impl ops::Add<Local> for Max {
     }
 }
 
-impl PartialOrd for Max {
-    fn partial_cmp(&self, other: &Max) -> Option<Ordering> {
-        Some(self.cmp(other))
+impl ops::Add<Max> for Max {
+    type Output = Max;
+
+    fn add(self, rhs: Max) -> Max {
+        match (self, rhs) {
+            (Max::Exact(lhs), Max::Exact(rhs)) => Max::Exact(lhs + rhs),
+            (Max::Exact(lhs), Max::LowerBound(rhs)) => Max::LowerBound(lhs + rhs),
+            (Max::LowerBound(lhs), Max::Exact(rhs)) => Max::LowerBound(lhs + rhs),
+            (Max::LowerBound(lhs), Max::LowerBound(rhs)) => Max::LowerBound(lhs + rhs),
+        }
     }
 }
 
-impl Ord for Max {
-    fn cmp(&self, rhs: &Max) -> Ordering {
-        match (self, rhs) {
-            (Max::Exact(lhs), Max::Exact(rhs)) => lhs.cmp(rhs),
-            (Max::Exact(_), Max::LowerBound(_)) => Ordering::Less,
-            (Max::LowerBound(_), Max::Exact(_)) => Ordering::Greater,
-            (Max::LowerBound(lhs), Max::LowerBound(rhs)) => lhs.cmp(rhs),
-        }
+fn max_of(mut iter: impl Iterator<Item = Max>) -> Option<Max> {
+    iter.next().map(|first| iter.fold(first, max))
+}
+
+fn max(lhs: Max, rhs: Max) -> Max {
+    match (lhs, rhs) {
+        (Max::Exact(lhs), Max::Exact(rhs)) => Max::Exact(cmp::max(lhs, rhs)),
+        (Max::Exact(lhs), Max::LowerBound(rhs)) => Max::LowerBound(cmp::max(lhs, rhs)),
+        (Max::LowerBound(lhs), Max::Exact(rhs)) => Max::LowerBound(cmp::max(lhs, rhs)),
+        (Max::LowerBound(lhs), Max::LowerBound(rhs)) => Max::LowerBound(cmp::max(lhs, rhs)),
     }
 }
 
@@ -452,5 +1024,41 @@ impl fmt::Display for Max {
             Max::Exact(n) => write!(f, "= {}", n),
             Max::LowerBound(n) => write!(f, ">= {}", n),
         }
+    }
+}
+
+// used to track indirect function calls (`fn` pointers)
+#[derive(Default)]
+struct Indirect {
+    called: bool,
+    callers: HashSet<NodeIndex>,
+    callees: HashSet<NodeIndex>,
+}
+
+// used to track dynamic dispatch (trait objects)
+#[derive(Debug, Default)]
+struct Dynamic {
+    called: bool,
+    callers: HashSet<NodeIndex>,
+    callees: HashSet<NodeIndex>,
+}
+
+// removes hashes like `::hfc5adc5d79855638`, if present
+fn dehash(demangled: &str) -> Option<&str> {
+    const HASH_LENGTH: usize = 19;
+
+    let len = demangled.as_bytes().len();
+    if len > HASH_LENGTH {
+        if demangled
+            .get(len - HASH_LENGTH..)
+            .map(|hash| hash.starts_with("::h"))
+            .unwrap_or(false)
+        {
+            Some(&demangled[..len - HASH_LENGTH])
+        } else {
+            None
+        }
+    } else {
+        None
     }
 }
