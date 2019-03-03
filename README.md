@@ -8,6 +8,11 @@
   </a>
 </p>
 
+Other examples:
+[Embedded CoAP / IPv4 server](https://japaric.github.io/cargo-call-stack/ipv4.svg)
+([source](https://github.com/japaric/jnet/tree/b5bd70cb998b1e01236f6b07ebc516a0359fde3d/firmware#ipv4))
+["Hello, world!"](https://japaric.github.io/cargo-call-stack/hello.svg)
+
 **HEADS UP**: This tool relies on an experimental feature (`-Z stack-sizes`)
 and implementation details of `rustc` (like symbol mangling) and could stop
 working with a nightly toolchain at any time. You have been warned!
