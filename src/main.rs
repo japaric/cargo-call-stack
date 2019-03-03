@@ -45,7 +45,7 @@ fn run() -> Result<i32, failure::Error> {
 
     let matches = App::new("cargo-call-stack")
         .version(crate_version!())
-        .author(crate_authors!())
+        .author(crate_authors!(", "))
         .about("Generate a call graph and perform whole program stack usage analysis")
         // as this is used as a Cargo subcommand the first argument will be the name of the binary
         // we ignore this argument
