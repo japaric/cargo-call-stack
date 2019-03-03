@@ -1,10 +1,10 @@
-// #![deny(warnings)]
+#![deny(warnings)]
 
+use core::{cmp, fmt, iter, ops};
 use std::{
     borrow::Cow,
-    cmp,
     collections::{BTreeMap, HashMap, HashSet},
-    env, fmt, fs, ops,
+    env, fs,
     path::PathBuf,
     process::{self, Command},
     time::SystemTime,
@@ -232,50 +232,42 @@ fn run() -> Result<i32, failure::Error> {
     // extract stack size information
     let stack_sizes: Vec<_> = match stack_sizes::analyze(&elf)? {
         Either::Left(fs) => fs
-            .into_iter()
-            .map(|f| {
+            .iter()
+            .flat_map(|f| {
                 if f.address().is_none() {
-                    // external symbols may contain a version string (e.g. `@@GLIBC_2.2.5`) that must
-                    // be removed
-                    (
-                        f.names()
-                            .iter()
-                            .map(|name| {
-                                if name.contains("@@") {
-                                    name.rsplit("@@").nth(1).unwrap()
-                                } else {
-                                    name
-                                }
-                            })
-                            .collect(),
-                        f.stack(),
-                    )
+                    // undefined / external symbols; these are *not* aliased
+
+                    let stack = f.stack();
+                    Either::Left(f.names().iter().map(move |name| {
+                        // these symbols may contain a version string (e.g. `@@GLIBC_2.2.5`) that must
+                        // be removed
+                        if let Some(name) = name.rsplit("@@").nth(1) {
+                            (vec![name], stack)
+                        } else {
+                            (vec![*name], stack)
+                        }
+                    }))
                 } else {
-                    (f.names().to_owned(), f.stack())
+                    Either::Right(iter::once((f.names().to_owned(), f.stack())))
                 }
             })
             .collect(),
+
+        // same as above (because reasons)
         Either::Right(fs) => fs
-            .into_iter()
-            .map(|f| {
+            .iter()
+            .flat_map(|f| {
                 if f.address().is_none() {
-                    // external symbols may contain a version string (e.g. `@@GLIBC_2.2.5`) that must
-                    // be removed
-                    (
-                        f.names()
-                            .iter()
-                            .map(|name| {
-                                if name.contains("@@") {
-                                    name.rsplit("@@").nth(1).unwrap()
-                                } else {
-                                    name
-                                }
-                            })
-                            .collect(),
-                        f.stack(),
-                    )
+                    let stack = f.stack();
+                    Either::Left(f.names().iter().map(move |name| {
+                        if let Some(name) = name.rsplit("@@").nth(1) {
+                            (vec![name], stack)
+                        } else {
+                            (vec![*name], stack)
+                        }
+                    }))
                 } else {
-                    (f.names().to_owned(), f.stack())
+                    Either::Right(iter::once((f.names().to_owned(), f.stack())))
                 }
             })
             .collect(),
