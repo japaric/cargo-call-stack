@@ -503,13 +503,14 @@ fn run() -> Result<i32, failure::Error> {
                     // XXX we have some type information for this call but it's unclear if we should
                     // try harder -- does this ever occur in pure Rust programs?
 
-                    let callee = if let Some(idx) = indices.get(*sym) {
+                    let sym = sym.expect("BUG? unnamed symbol is being invoked");
+                    let callee = if let Some(idx) = indices.get(sym) {
                         *idx
                     } else {
                         warn!("no stack information for `{}`", sym);
 
-                        let idx = g.add_node(Node(*sym, None));
-                        indices.insert(Cow::Borrowed(*sym), idx);
+                        let idx = g.add_node(Node(sym, None));
+                        indices.insert(Cow::Borrowed(sym), idx);
                         idx
                     };
 

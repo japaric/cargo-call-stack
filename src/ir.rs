@@ -71,7 +71,7 @@ named!(comment<CompleteStr, Comment>, do_parse!(
 struct Ident<'a>(&'a str);
 
 // LLVM LangRef: `[-a-zA-Z$._][-a-zA-Z$._0-9]*`
-// not using `named!` because of lifetime inference doesn't work correctly
+// not using `named!` because lifetime inference doesn't work correctly
 fn ident<'a>(input: CompleteStr<'a>) -> IResult<CompleteStr<'a>, Ident<'a>> {
     map_res!(
         input,
@@ -85,12 +85,21 @@ fn ident<'a>(input: CompleteStr<'a>) -> IResult<CompleteStr<'a>, Ident<'a>> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Global;
+struct Global<'a>(Option<&'a str>);
 
 named!(global<CompleteStr, Global>, do_parse!(
     char!('@') >>
-        alt!(map!(string, drop) | map!(digit, drop) | map!(ident, drop)) >>
-        (Global))
+        s: alt!(map!(string, |s| Some(s.0)) | map!(digit, |_| None) | map!(ident, |i| Some(i.0))) >>
+        (Global(s)))
+);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Local;
+
+named!(local<CompleteStr, Local>, do_parse!(
+    char!('%') >>
+        alt!(map!(digit, drop) | map!(ident, drop)) >>
+        (Local))
 );
 
 // `internal`, `fastcc`, `dereferenceable(4)`, etc.
@@ -116,7 +125,7 @@ named!(attribute<CompleteStr, Attribute>, do_parse!(
 
 // NOTE constant operation
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Bitcast<'a>(&'a str);
+struct Bitcast<'a>(Option<&'a str>);
 
 named!(bitcast<CompleteStr, Bitcast>, do_parse!(
     tag!("bitcast") >> space >>
@@ -124,7 +133,7 @@ named!(bitcast<CompleteStr, Bitcast>, do_parse!(
             char!('('),
             do_parse!(
                 call!(type_) >> space >>
-                    name: function >> space >>
+                    name: global >> space >>
                     tag!("to") >> space >>
                     call!(type_) >> (name.0)
             ),
@@ -190,7 +199,7 @@ named!(string<CompleteStr, String>, do_parse!(
 mod tests {
     use nom::types::CompleteStr as S;
 
-    use super::{Alias, Comment, FnSig, GetElementPtr, Ident, String, Type};
+    use super::{Alias, Comment, FnSig, GetElementPtr, Ident, Local, String, Type};
 
     #[test]
     fn alias() {
@@ -249,6 +258,15 @@ mod tests {
 
         assert!(super::ident(S("\"foo\"")).is_err());
         assert!(super::ident(S("0foo")).is_err());
+    }
+
+    #[test]
+    fn local() {
+        assert_eq!(super::local(S("%113")), Ok((S(""), Local)));
+
+        assert_eq!(super::local(S("%.")), Ok((S(""), Local)));
+
+        assert_eq!(super::local(S("%.9")), Ok((S(""), Local)));
     }
 
     #[test]
