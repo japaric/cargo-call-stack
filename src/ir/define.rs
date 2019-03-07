@@ -89,7 +89,8 @@ named!(argument<CompleteStr, Argument>, do_parse!(
         alt!(
             map!(call!(super::bitcast), drop) |
             map!(call!(super::getelementptr), drop) |
-            do_parse!(opt!(char!('%')) >> digit >> (()))) >>
+            map!(super::local, drop) |
+            map!(digit, drop)) >>
         (Argument(ty))
 ));
 
@@ -235,6 +236,18 @@ mod tests {
         assert_eq!(
             super::assign(S(r#"%0 = tail call nonnull i32 (i32)* @foo(), !dbg !1200"#)),
             Ok((S(""), Stmt::DirectCall("foo")))
+        );
+
+        assert_eq!(
+            super::assign(S(r#"%113 = call zeroext i1 %112({}* nonnull align 1 %109, [0 x i8]* noalias nonnull readonly align 1 %., i32 %.9) #10, !dbg !30714, !noalias !30727"#)),
+            Ok((S(""), Stmt::IndirectCall(FnSig {
+                inputs: vec![
+                    Type::Pointer(Box::new(Type::Struct(vec![]))),
+                    Type::Pointer(Box::new(Type::Array(0, Box::new(Type::Integer(8))))),
+                    Type::Integer(32),
+                ],
+                output: Some(Box::new(Type::Integer(1))),
+            })))
         );
     }
 
