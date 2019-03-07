@@ -14,7 +14,7 @@ pub enum Stmt<'a> {
     // `  call void asm sideeffect "cpsid i"`
     Asm(&'a str),
 
-    BitcastCall(&'a str),
+    BitcastCall(Option<&'a str>),
 
     DirectCall(&'a str),
 
@@ -244,7 +244,7 @@ mod tests {
             super::bitcast_call(S(
                 r#"tail call i32 bitcast (i8* @__sbss to i32 ()*)() #6, !dbg !1177"#
             )),
-            Ok((S(""), Stmt::BitcastCall("__sbss")))
+            Ok((S(""), Stmt::BitcastCall(Some("__sbss"))))
         );
     }
 
@@ -285,6 +285,21 @@ mod tests {
                         Type::Pointer(Box::new(Type::Struct(vec![]))),
                         Type::Pointer(Box::new(Type::Array(0, Box::new(Type::Integer(8))))),
                         Type::Integer(64),
+                    ],
+                    output: Some(Box::new(Type::Integer(1)))
+                })
+            ))
+        );
+
+        assert_eq!(
+            super::indirect_call(S(r#"call zeroext i1 %98({}* nonnull align 1 %93, [0 x i8]* noalias nonnull readonly align 1 bitcast (<{ [10 x i8] }>* @1 to [0 x i8]*), i32 10) #10, !dbg !5301"#)),
+            Ok((
+                S(""),
+                Stmt::IndirectCall(FnSig {
+                    inputs: vec![
+                        Type::Pointer(Box::new(Type::Struct(vec![]))),
+                        Type::Pointer(Box::new(Type::Array(0, Box::new(Type::Integer(8))))),
+                        Type::Integer(32),
                     ],
                     output: Some(Box::new(Type::Integer(1)))
                 })
@@ -443,5 +458,4 @@ start:
             ))
         );
     }
-
 }

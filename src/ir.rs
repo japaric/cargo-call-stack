@@ -85,12 +85,12 @@ fn ident<'a>(input: CompleteStr<'a>) -> IResult<CompleteStr<'a>, Ident<'a>> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Global;
+struct Global<'a>(Option<&'a str>);
 
 named!(global<CompleteStr, Global>, do_parse!(
     char!('@') >>
-        alt!(map!(string, drop) | map!(digit, drop) | map!(ident, drop)) >>
-        (Global))
+        s: alt!(map!(string, |s| Some(s.0)) | map!(digit, |_| None) | map!(ident, |i| Some(i.0))) >>
+        (Global(s)))
 );
 
 // `internal`, `fastcc`, `dereferenceable(4)`, etc.
@@ -116,7 +116,7 @@ named!(attribute<CompleteStr, Attribute>, do_parse!(
 
 // NOTE constant operation
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Bitcast<'a>(&'a str);
+struct Bitcast<'a>(Option<&'a str>);
 
 named!(bitcast<CompleteStr, Bitcast>, do_parse!(
     tag!("bitcast") >> space >>
@@ -124,7 +124,7 @@ named!(bitcast<CompleteStr, Bitcast>, do_parse!(
             char!('('),
             do_parse!(
                 call!(type_) >> space >>
-                    name: function >> space >>
+                    name: global >> space >>
                     tag!("to") >> space >>
                     call!(type_) >> (name.0)
             ),
