@@ -463,7 +463,8 @@ fn run() -> Result<i32, failure::Error> {
         } else {
             // from `compiler-builtins`
             match canonical_name {
-                "__aeabi_memcpy" | "__aeabi_memcpy4" => {
+                "__aeabi_memcpy" | "__aeabi_memcpy4" | "__aeabi_memcpy8" => {
+                    // `fn(*mut u8, *const u8, usize)`
                     let sig = FnSig {
                         inputs: vec![
                             Type::Pointer(Box::new(Type::Integer(8))),
@@ -475,7 +476,8 @@ fn run() -> Result<i32, failure::Error> {
                     indirects.entry(sig).or_default().callees.insert(idx);
                 }
 
-                "__aeabi_memclr" | "__aeabi_memclr4" => {
+                "__aeabi_memclr" | "__aeabi_memclr4" | "__aeabi_memclr8" => {
+                    // `fn(*mut u8, usize)`
                     let sig = FnSig {
                         inputs: vec![
                             Type::Pointer(Box::new(Type::Integer(8))),
@@ -486,7 +488,8 @@ fn run() -> Result<i32, failure::Error> {
                     indirects.entry(sig).or_default().callees.insert(idx);
                 }
 
-                "__aeabi_memset" | "__aeabi_memset4" => {
+                "__aeabi_memset" | "__aeabi_memset4" | "__aeabi_memset8" => {
+                    // `fn(*mut u8, usize, i32)`
                     let sig = FnSig {
                         inputs: vec![
                             Type::Pointer(Box::new(Type::Integer(8))),
