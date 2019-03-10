@@ -763,9 +763,9 @@ fn run() -> Result<i32, failure::Error> {
                 .filter_map(|entry| {
                     let addr = entry.value() as u32;
                     entry.get_name(&ef).ok().and_then(|name| {
-                        if name.starts_with("$d.") {
+                        if name.starts_with("$d") {
                             Some((addr, Tag::Data))
-                        } else if name.starts_with("$t.") {
+                        } else if name.starts_with("$t") {
                             Some((addr, Tag::Thumb))
                         } else {
                             None
@@ -782,14 +782,30 @@ fn run() -> Result<i32, failure::Error> {
             let stext = sect.address();
             let text = sect.raw_data(&ef);
 
-            for (names, (address, size, _)) in &stack_sizes {
+            for (names, (address, mut size, _)) in &stack_sizes {
                 if let Some(address) = address {
                     // clear the thumb bit
                     let address = *address & !1;
                     let canonical_name = names[0];
 
+                    if size == 0 {
+                        // try harder at finding out the size of this symbol
+                        if let Ok(needle) =
+                            tags.binary_search_by(|tag| tag.0.cmp(&(address as u32)))
+                        {
+                            let start = tags[needle];
+                            if start.1 == Tag::Thumb {
+                                if let Some(end) = tags.get(needle + 1) {
+                                    if end.1 == Tag::Thumb {
+                                        size = u64::from(end.0 - start.0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     let start = (address - stext) as usize;
-                    let end = start + *size as usize;
+                    let end = start + size as usize;
                     let (bls, bs) = thumb::analyze(
                         &text[start..end],
                         address as u32,
@@ -814,7 +830,7 @@ fn run() -> Result<i32, failure::Error> {
                     for offset in bs {
                         let addr = (address as i64 + i64::from(offset)) as u64;
 
-                        if addr >= address && addr < (address + *size as u64) {
+                        if addr >= address && addr < (address + size) {
                             // intra-function B branches are not function calls
                         } else {
                             // address may be off by one due to the thumb bit being set
