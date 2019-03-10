@@ -234,12 +234,31 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
+    // TODO add `unwrap_or(host)` where `host` comes from `rustc_version`
+    let target = project.target().or(target_flag);
+
+    // we know how to analyze the machine code in the ELF file for these targets thus we have more
+    // information and need less LLVM-IR hacks
+    let target_ = match target.unwrap_or("") {
+        "thumbv6m-none-eabi" => Target::Thumbv6m,
+        "thumbv7m-none-eabi" | "thumbv7em-none-eabi" | "thumbv7em-none-eabihf" => Target::Thumbv7m,
+        _ => Target::Other,
+    };
+
     // extract stack size information
     let stack_sizes: Vec<_> = match stack_sizes::analyze(&elf)? {
         Either::Left(fs) => fs
             .iter()
             .flat_map(|f| {
-                let address = f.address().map(u64::from);
+                let address = f.address().map(u64::from).map(|addr| {
+                    if target_.is_thumb() {
+                        // clear the thumb bit
+                        addr & !1
+                    } else {
+                        addr
+                    }
+                });
+
                 if address.is_none() {
                     // undefined / external symbols; these are *not* aliased
 
@@ -267,7 +286,15 @@ fn run() -> Result<i32, failure::Error> {
         Either::Right(fs) => fs
             .iter()
             .flat_map(|f| {
-                let address = f.address();
+                let address = f.address().map(|addr| {
+                    if target_.is_thumb() {
+                        // clear the thumb bit
+                        addr & !1
+                    } else {
+                        addr
+                    }
+                });
+
                 if address.is_none() {
                     let stack = f.stack();
                     let size = f.size();
@@ -322,17 +349,6 @@ fn run() -> Result<i32, failure::Error> {
             }
         }
     }
-
-    // TODO add `unwrap_or(host)` where `host` comes from `rustc_version`
-    let target = project.target().or(target_flag);
-
-    // we know how to analyze the machine code in the ELF file for these targets thus we have more
-    // information and need less LLVM-IR hacks
-    let target_ = match target.unwrap_or("") {
-        "thumbv6m-none-eabi" => Target::Thumbv6m,
-        "thumbv7m-none-eabi" | "thumbv7em-none-eabi" | "thumbv7em-none-eabihf" => Target::Thumbv7m,
-        _ => Target::Other,
-    };
 
     // add all real nodes
     let mut has_stack_usage_info = false;
@@ -787,7 +803,6 @@ fn run() -> Result<i32, failure::Error> {
                         // address may be off by one due to the thumb bit being set
                         let name = addr2name
                             .get(&addr)
-                            .or_else(|| addr2name.get(&(addr + 1)))
                             .unwrap_or_else(|| panic!("BUG? no symbol at address {}", addr));
 
                         if !callees_seen.contains(name) {
@@ -805,7 +820,6 @@ fn run() -> Result<i32, failure::Error> {
                             // address may be off by one due to the thumb bit being set
                             let name = addr2name
                                 .get(&addr)
-                                .or_else(|| addr2name.get(&(addr + 1)))
                                 .unwrap_or_else(|| panic!("BUG? no symbol at address {}", addr));
 
                             if !callees_seen.contains(name) {
