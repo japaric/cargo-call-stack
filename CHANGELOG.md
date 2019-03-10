@@ -5,15 +5,24 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- For ARMv{6,7}-M programs the tool will also inspect the machine code in the
+  output binary (ELF file) to get even more information about the call graph.
+  This helps with LLVM intrinsics (where it's unclear from the LLVM-IR if a call
+  to `llvm.memcpy` will lower to a call to `__aeabi_memcpy`, a call to
+  `__aeabi_memcpy4` or machine code) and binary blobs, like
+  `libcompiler_builtins.rlib`, for which the tool doesn't have LLVM-IR.
+
 ## [v0.1.1] - 2019-03-03
 
-# Added
+### Added
 
 - The start point of the call graph can now be specific via the command line.
   When specified the call graph will be filtered to only show nodes reachable
   from the start point.
 
-# Changed
+### Changed
 
 - Only a single edge is now drawn between two nodes; this is the case even if
   one calls the other several times. This greatly reduces the clutter in the
@@ -34,7 +43,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
   callees. The candidates are computed using the (rather limited) type
   information contained in the LLVM-IR so the results can be inaccurate.
 
-# Fixed
+### Fixed
 
 - Fixed lots of LLVM-IR parsing bugs. The tool can now deal with complex
   programs like "Hello, world".

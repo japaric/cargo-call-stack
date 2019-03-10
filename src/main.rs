@@ -1,4 +1,4 @@
-#![deny(warnings)]
+// #![deny(warnings)]
 
 use core::{cmp, fmt, iter, ops};
 use std::{
@@ -22,10 +22,15 @@ use petgraph::{
     visit::{Dfs, Reversed, Topo},
     Direction,
 };
+use xmas_elf::{sections::SectionData, symbol_table::Entry, ElfFile};
 
-use crate::ir::{FnSig, Item, Stmt, Type};
+use crate::{
+    ir::{FnSig, Item, Stmt, Type},
+    thumb::Tag,
+};
 
 mod ir;
+mod thumb;
 
 fn main() -> Result<(), failure::Error> {
     match run() {
@@ -234,21 +239,26 @@ fn run() -> Result<i32, failure::Error> {
         Either::Left(fs) => fs
             .iter()
             .flat_map(|f| {
-                if f.address().is_none() {
+                let address = f.address().map(u64::from);
+                if address.is_none() {
                     // undefined / external symbols; these are *not* aliased
 
                     let stack = f.stack();
+                    let size = f.size();
                     Either::Left(f.names().iter().map(move |name| {
                         // these symbols may contain a version string (e.g. `@@GLIBC_2.2.5`) that must
                         // be removed
                         if let Some(name) = name.rsplit("@@").nth(1) {
-                            (vec![name], stack)
+                            (vec![name], (address, size, stack))
                         } else {
-                            (vec![*name], stack)
+                            (vec![*name], (address, size, stack))
                         }
                     }))
                 } else {
-                    Either::Right(iter::once((f.names().to_owned(), f.stack())))
+                    Either::Right(iter::once((
+                        f.names().to_owned(),
+                        (address, f.size(), f.stack()),
+                    )))
                 }
             })
             .collect(),
@@ -257,17 +267,22 @@ fn run() -> Result<i32, failure::Error> {
         Either::Right(fs) => fs
             .iter()
             .flat_map(|f| {
-                if f.address().is_none() {
+                let address = f.address();
+                if address.is_none() {
                     let stack = f.stack();
+                    let size = f.size();
                     Either::Left(f.names().iter().map(move |name| {
                         if let Some(name) = name.rsplit("@@").nth(1) {
-                            (vec![name], stack)
+                            (vec![name], (address, size, stack))
                         } else {
-                            (vec![*name], stack)
+                            (vec![*name], (address, size, stack))
                         }
                     }))
                 } else {
-                    Either::Right(iter::once((f.names().to_owned(), f.stack())))
+                    Either::Right(iter::once((
+                        f.names().to_owned(),
+                        (address, f.size(), f.stack()),
+                    )))
                 }
             })
             .collect(),
@@ -308,14 +323,30 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
+    // TODO add `unwrap_or(host)` where `host` comes from `rustc_version`
+    let target = project.target().or(target_flag);
+
+    // we know how to analyze the machine code in the ELF file for these targets thus we have more
+    // information and need less LLVM-IR hacks
+    let target_ = match target.unwrap_or("") {
+        "thumbv6m-none-eabi" => Target::Thumbv6m,
+        "thumbv7m-none-eabi" | "thumbv7em-none-eabi" | "thumbv7em-none-eabihf" => Target::Thumbv7m,
+        _ => Target::Other,
+    };
+
     // add all real nodes
     let mut has_stack_usage_info = false;
-    let target = project.target().or(target_flag);
     let mut has_untyped_symbols = false;
-    for (names, mut stack) in stack_sizes {
+    let mut addr2name = BTreeMap::new();
+    for (names, (address, _, mut stack)) in &stack_sizes {
         let canonical_name = names[0];
         for name in names {
             aliases.insert(name, canonical_name);
+        }
+
+        if let Some(addr) = address {
+            let _out = addr2name.insert(addr, canonical_name);
+            debug_assert!(_out.is_none());
         }
 
         if stack.is_none() {
@@ -476,16 +507,18 @@ fn run() -> Result<i32, failure::Error> {
     }
 
     // add edges
+    let mut edges: HashMap<_, HashSet<_>> = HashMap::new(); // name -> [name]
     for define in defines.values() {
-        let caller = if let Some(canonical_name) = aliases.get(&define.name) {
-            indices[*canonical_name]
+        let (caller, callees_seen) = if let Some(canonical_name) = aliases.get(&define.name) {
+            (
+                indices[*canonical_name],
+                edges.entry(*canonical_name).or_default(),
+            )
         } else {
             // this symbol was GC-ed by the linker, skip
             continue;
         };
 
-        // to avoid inserting multiple edges between a caller and the same callee
-        let mut func_seen = HashSet::new();
         // to avoid printing several warnings about the same thing
         let mut asm_seen = HashSet::new();
         let mut llvm_seen = HashSet::new();
@@ -540,11 +573,17 @@ fn run() -> Result<i32, failure::Error> {
                     }
 
                     let mut call = |callee, name| {
-                        if !func_seen.contains(name) {
+                        if !callees_seen.contains(name) {
                             g.add_edge(caller, callee, ());
-                            func_seen.insert(name);
+                            callees_seen.insert(name);
                         }
                     };
+
+                    if target_.is_thumb() && func.starts_with("llvm.") {
+                        // we'll analyze the machine code in the ELF file to figure out what these
+                        // lower to
+                        continue;
+                    }
 
                     // TODO? consider alignment and `value` argument to only include one edge
                     // TODO? consider the `len` argument to elide the call to `*mem*`
@@ -553,6 +592,7 @@ fn run() -> Result<i32, failure::Error> {
                             call(*callee, "memcpy");
                         }
 
+                        // ARMv7-R and the like use these
                         if let Some(callee) = indices.get("__aeabi_memcpy") {
                             call(*callee, "__aeabi_memcpy");
                         }
@@ -571,6 +611,7 @@ fn run() -> Result<i32, failure::Error> {
                             call(*callee, "memset");
                         }
 
+                        // ARMv7-R and the like use these
                         if let Some(callee) = indices.get("__aeabi_memset") {
                             call(*callee, "__aeabi_memset");
                         }
@@ -621,8 +662,8 @@ fn run() -> Result<i32, failure::Error> {
 
                     let callee = indices[*func];
 
-                    if !func_seen.contains(func) {
-                        func_seen.insert(func);
+                    if !callees_seen.contains(func) {
+                        callees_seen.insert(func);
                         g.add_edge(caller, callee, ());
                     }
                 }
@@ -652,30 +693,94 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
-    // ad-hoc edges
-    // we know this from analyzing `compiler-builtins` (we never have access to its llvm-ir)
-    match target.unwrap_or("") {
-        "thumbv6m-none-eabi"
-        | "thumbv7m-none-eabi"
-        | "thumbv7em-none-eabi"
-        | "thumbv7em-none-eabihf" => {
-            let mut branches_to = |caller, callee| {
-                if let Some(icaller) = indices.get(caller) {
-                    if let Some(icallee) = indices.get(callee) {
-                        g.add_edge(*icaller, *icallee, ());
+    // here we parse the machine code in the ELF file to find out edges that don't appear in the
+    // LLVM-IR (e.g. `fadd` operation, `call llvm.umul.with.overflow`, etc.) or are difficult to
+    // disambiguate from the LLVM-IR (e.g. does this `llvm.memcpy` lower to a call to
+    // `__aebi_memcpy`, a call to `__aebi_memcpy4` or machine instructions?)
+    if target_.is_thumb() {
+        let ef = ElfFile::new(&elf).map_err(failure::err_msg)?;
 
-                        warn!(
-                            "ad-hoc: `{}` calls `{}` (last checked: Rust {})",
-                            caller, callee, VERS
-                        )
+        let sect = ef.find_section_by_name(".symtab").expect("UNREACHABLE");
+        let mut tags: Vec<_> = match sect.get_data(&ef).unwrap() {
+            SectionData::SymbolTable32(entries) => entries
+                .iter()
+                .filter_map(|entry| {
+                    let addr = entry.value() as u32;
+                    entry.get_name(&ef).ok().and_then(|name| {
+                        if name.starts_with("$d.") {
+                            Some((addr, Tag::Data))
+                        } else if name.starts_with("$t.") {
+                            Some((addr, Tag::Thumb))
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .collect(),
+            _ => unreachable!(),
+        };
+
+        tags.sort_by(|a, b| a.0.cmp(&b.0));
+
+        if let Some(sect) = ef.find_section_by_name(".text") {
+            let stext = sect.address();
+            let text = sect.raw_data(&ef);
+
+            for (names, (address, size, _)) in &stack_sizes {
+                if let Some(address) = address {
+                    // clear the thumb bit
+                    let address = *address & !1;
+                    let canonical_name = names[0];
+
+                    let start = (address - stext) as usize;
+                    let end = start + *size as usize;
+                    let (bls, bs) = thumb::analyze(
+                        &text[start..end],
+                        address as u32,
+                        target_ == Target::Thumbv7m,
+                        &tags,
+                    );
+                    let caller = indices[canonical_name];
+                    let callees_seen = edges.entry(canonical_name).or_default();
+                    for offset in bls {
+                        let addr = (address as i64 + i64::from(offset)) as u64;
+                        // address may be off by one due to the thumb bit being set
+                        let name = addr2name
+                            .get(&addr)
+                            .or_else(|| addr2name.get(&(addr + 1)))
+                            .unwrap_or_else(|| panic!("BUG? no symbol at address {}", addr));
+
+                        if !callees_seen.contains(name) {
+                            g.add_edge(caller, indices[*name], ());
+                            callees_seen.insert(name);
+                        }
                     }
-                }
-            };
 
-            branches_to("__aeabi_memclr", "__aeabi_memset");
-            branches_to("__aeabi_memclr4", "__aeabi_memset4");
+                    for offset in bs {
+                        let addr = (address as i64 + i64::from(offset)) as u64;
+
+                        if addr >= address && addr < (address + *size as u64) {
+                            // intra-function B branches are not function calls
+                        } else {
+                            // address may be off by one due to the thumb bit being set
+                            let name = addr2name
+                                .get(&addr)
+                                .or_else(|| addr2name.get(&(addr + 1)))
+                                .unwrap_or_else(|| panic!("BUG? no symbol at address {}", addr));
+
+                            if !callees_seen.contains(name) {
+                                g.add_edge(caller, indices[*name], ());
+                                callees_seen.insert(name);
+                            }
+                        }
+                    }
+                } else {
+                    // ignore external symbols
+                }
+            }
+        } else {
+            error!(".text section not found")
         }
-        _ => {}
     }
 
     // add fictitious nodes for indirect function calls
@@ -1053,5 +1158,21 @@ fn dehash(demangled: &str) -> Option<&str> {
         }
     } else {
         None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Target {
+    Other,
+    Thumbv6m,
+    Thumbv7m,
+}
+
+impl Target {
+    fn is_thumb(&self) -> bool {
+        match *self {
+            Target::Thumbv6m | Target::Thumbv7m => true,
+            Target::Other => false,
+        }
     }
 }
