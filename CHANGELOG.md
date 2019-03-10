@@ -5,15 +5,41 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.2] - 2018-03-10
+
+### Added
+
+- More type information about compiler builtins has been added.
+
+- More stack usage information about compiler builtins cross compiled to
+  ARMv{6,7}-M has been added.
+
+### Changed
+
+- For ARMv{6,7}-M programs the tool will also inspect the machine code in the
+  output binary (ELF file) to get even more information about the call graph.
+  This helps with LLVM intrinsics (where it's unclear from the LLVM-IR if a call
+  to `llvm.memcpy` will lower to a call to `__aeabi_memcpy`, a call to
+  `__aeabi_memcpy4` or machine code) and binary blobs, like
+  `libcompiler_builtins.rlib`, for which the tool doesn't have LLVM-IR.
+
+### Fixed
+
+- The tool will not crash when encountering functions that contain floating
+  points in their signature.
+
+- Warning about `asm!` and llvm intrinsics will not be displayed more than once
+  in the output.
+
 ## [v0.1.1] - 2019-03-03
 
-# Added
+### Added
 
 - The start point of the call graph can now be specific via the command line.
   When specified the call graph will be filtered to only show nodes reachable
   from the start point.
 
-# Changed
+### Changed
 
 - Only a single edge is now drawn between two nodes; this is the case even if
   one calls the other several times. This greatly reduces the clutter in the
@@ -34,7 +60,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
   callees. The candidates are computed using the (rather limited) type
   information contained in the LLVM-IR so the results can be inaccurate.
 
-# Fixed
+### Fixed
 
 - Fixed lots of LLVM-IR parsing bugs. The tool can now deal with complex
   programs like "Hello, world".
@@ -48,5 +74,6 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 Initial release
 
-[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.2...HEAD
+[v0.1.2]: https://github.com/japaric/cargo-call-stack/compare/v0.1.1...v0.1.2
 [v0.1.1]: https://github.com/japaric/cargo-call-stack/compare/v0.1.0...v0.1.1
