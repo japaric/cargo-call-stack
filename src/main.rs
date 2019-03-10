@@ -506,6 +506,9 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
+    // to avoid printing several warnings about the same thing
+    let mut asm_seen = HashSet::new();
+    let mut llvm_seen = HashSet::new();
     // add edges
     let mut edges: HashMap<_, HashSet<_>> = HashMap::new(); // name -> [name]
     for define in defines.values() {
@@ -519,9 +522,6 @@ fn run() -> Result<i32, failure::Error> {
             continue;
         };
 
-        // to avoid printing several warnings about the same thing
-        let mut asm_seen = HashSet::new();
-        let mut llvm_seen = HashSet::new();
         for stmt in &define.stmts {
             match stmt {
                 Stmt::Asm(expr) => {
