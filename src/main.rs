@@ -369,20 +369,39 @@ fn run() -> Result<i32, failure::Error> {
             // here we inject some target specific information we get from analyzing
             // `libcompiler_builtins.rlib`
 
-            let ad_hoc = match target.unwrap_or("") {
+            let t = target.unwrap_or("");
+            let ad_hoc = match t {
                 "thumbv6m-none-eabi" => match canonical_name {
-                    "__aeabi_memcpy" | "__aeabi_memset" | "__aeabi_memclr" | "__aeabi_memclr4" => {
+                    "__aeabi_memcpy" | "__aeabi_memset" | "__aeabi_memclr" | "__aeabi_memclr4"
+                    | "__aeabi_f2uiz" => {
                         stack = Some(0);
                         true
                     }
 
-                    "__aeabi_memcpy4" | "__aeabi_memset4" => {
+                    "__aeabi_memcpy4" | "__aeabi_memset4" | "__aeabi_f2iz" | "__aeabi_fadd"
+                    | "__aeabi_fdiv" | "__aeabi_fmul" | "__aeabi_fsub" => {
                         stack = Some(8);
                         true
                     }
 
-                    "memcmp" => {
+                    "memcmp" | "__aeabi_fcmpgt" | "__aeabi_fcmplt" | "__aeabi_i2f"
+                    | "__aeabi_ui2f" => {
                         stack = Some(16);
+                        true
+                    }
+
+                    "__addsf3" => {
+                        stack = Some(32);
+                        true
+                    }
+
+                    "__divsf3" => {
+                        stack = Some(40);
+                        true
+                    }
+
+                    "__mulsf3" => {
+                        stack = Some(48);
                         true
                     }
 
@@ -403,6 +422,26 @@ fn run() -> Result<i32, failure::Error> {
 
                         "__aeabi_memset" | "__aeabi_memset4" => {
                             stack = Some(8);
+                            true
+                        }
+
+                        // ARMv7-M only below this point
+                        "__aeabi_f2iz" | "__aeabi_f2uiz" | "__aeabi_fadd" | "__aeabi_fcmpgt"
+                        | "__aeabi_fcmplt" | "__aeabi_fdiv" | "__aeabi_fmul" | "__aeabi_fsub"
+                        | "__aeabi_i2f" | "__aeabi_ui2f"
+                            if t == "thumbv7m-none-eabi" =>
+                        {
+                            stack = Some(0);
+                            true
+                        }
+
+                        "__addsf3" | "__mulsf3" if t == "thumbv7m-none-eabi" => {
+                            stack = Some(16);
+                            true
+                        }
+
+                        "__divsf3" if t == "thumbv7m-none-eabi" => {
+                            stack = Some(20);
                             true
                         }
 
