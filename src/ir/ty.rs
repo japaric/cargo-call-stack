@@ -13,6 +13,12 @@ pub enum Type<'a> {
     // `[0 x i8]`
     Array(usize, Box<Type<'a>>),
 
+    // `double`
+    Double,
+
+    // `float`
+    Float,
+
     // `i8`
     Integer(usize),
 
@@ -84,6 +90,14 @@ impl<'a> fmt::Display for Type<'a> {
                 f.write_str("]")?;
             }
 
+            Type::Double => {
+                f.write_str("double")?;
+            }
+
+            Type::Float => {
+                f.write_str("float")?;
+            }
+
             Type::Integer(n) => {
                 f.write_str("i")?;
                 write!(f, "{}", n)?;
@@ -123,6 +137,10 @@ named!(array<CompleteStr, Type>, delimited!(
     ),
     char!(']')
 ));
+
+named!(double<CompleteStr, Type>, map!(tag!("double"), |_| Type::Double));
+
+named!(float<CompleteStr, Type>, map!(tag!("float"), |_| Type::Float));
 
 named!(integer<CompleteStr, Type>, do_parse!(
     char!('i') >>
@@ -173,7 +191,10 @@ pub fn type_(input: CompleteStr) -> IResult<CompleteStr, Type> {
 
         Ok((rest, ty))
     } else {
-        let (mut rest, mut ty) = alt!(rest, array | packed_struct | struct_ | alias | integer)?;
+        let (mut rest, mut ty) = alt!(
+            rest,
+            array | packed_struct | struct_ | alias | double | float | integer
+        )?;
 
         // is this a pointer?
         loop {
