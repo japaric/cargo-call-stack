@@ -501,6 +501,43 @@ fn run() -> Result<i32, failure::Error> {
                     indirects.entry(sig).or_default().callees.insert(idx);
                 }
 
+                "__aeabi_fadd" | "__addsf3" | "__aeabi_fsub" | "__subsf3" | "__aeabi_fdiv"
+                | "__divsf3" | "__aeabi_fmul" | "__mulsf3" => {
+                    // `fn(f32, f32) -> f32`
+                    let sig = FnSig {
+                        inputs: vec![Type::Float, Type::Float],
+                        output: Some(Box::new(Type::Float)),
+                    };
+                    indirects.entry(sig).or_default().callees.insert(idx);
+                }
+
+                "__aeabi_fcmpgt" | "__aeabi_fcmplt" => {
+                    // `fn(f32, f32) -> i32`
+                    let sig = FnSig {
+                        inputs: vec![Type::Float, Type::Float],
+                        output: Some(Box::new(Type::Integer(32))),
+                    };
+                    indirects.entry(sig).or_default().callees.insert(idx);
+                }
+
+                "__aeabi_f2uiz" | "__aeabi_f2iz" => {
+                    // `fn(f32) -> {i,u}32`
+                    let sig = FnSig {
+                        inputs: vec![Type::Float],
+                        output: Some(Box::new(Type::Integer(32))),
+                    };
+                    indirects.entry(sig).or_default().callees.insert(idx);
+                }
+
+                "__aeabi_ui2f" | "__aeabi_i2f" => {
+                    // `fn({i,u}32) -> f32`
+                    let sig = FnSig {
+                        inputs: vec![Type::Integer(32)],
+                        output: Some(Box::new(Type::Float)),
+                    };
+                    indirects.entry(sig).or_default().callees.insert(idx);
+                }
+
                 _ => {
                     has_untyped_symbols = true;
                     warn!("no type information for `{}`", canonical_name);
