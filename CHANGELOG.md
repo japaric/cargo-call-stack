@@ -5,6 +5,15 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.2] - 2018-03-10
+
+### Added
+
+- More type information about compiler builtins has been added.
+
+- More stack usage information about compiler builtins cross compiled to
+  ARMv{6,7}-M has been added.
+
 ### Changed
 
 - For ARMv{6,7}-M programs the tool will also inspect the machine code in the
@@ -13,6 +22,14 @@ This project adheres to [Semantic Versioning](http://semver.org/).
   to `llvm.memcpy` will lower to a call to `__aeabi_memcpy`, a call to
   `__aeabi_memcpy4` or machine code) and binary blobs, like
   `libcompiler_builtins.rlib`, for which the tool doesn't have LLVM-IR.
+
+### Fixed
+
+- The tool will not crash when encountering functions that contain floating
+  points in their signature.
+
+- Warning about `asm!` and llvm intrinsics will not be displayed more than once
+  in the output.
 
 ## [v0.1.1] - 2019-03-03
 
@@ -57,5 +74,6 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 Initial release
 
-[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.2...HEAD
+[v0.1.2]: https://github.com/japaric/cargo-call-stack/compare/v0.1.1...v0.1.2
 [v0.1.1]: https://github.com/japaric/cargo-call-stack/compare/v0.1.0...v0.1.1
