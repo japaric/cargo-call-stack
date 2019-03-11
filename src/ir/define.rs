@@ -149,7 +149,7 @@ named!(other<CompleteStr, Stmt>, do_parse!(
 
 // NOTE we discard the LHS of assignments
 named!(assign<CompleteStr, Stmt>, do_parse!(
-    char!('%') >> digit >> space >> char!('=') >> space >>
+    call!(super::local) >> space >> char!('=') >> space >>
         rhs: alt!(asm | bitcast_call | direct_call | indirect_call | other) >>
         (rhs)
 ));
@@ -249,6 +249,11 @@ mod tests {
                 output: Some(Box::new(Type::Integer(1))),
             })))
         );
+
+        assert_eq!(
+            super::assign(S(r#"%_0.sroa.0.0.insert.insert.i.i39 = tail call i32 @llvm.bswap.i32(i32 %page.0.i38) #9"#)),
+            Ok((S(""), Stmt::DirectCall("llvm.bswap.i32")))
+        );
     }
 
     #[test]
@@ -273,6 +278,11 @@ mod tests {
         assert_eq!(
             super::direct_call(S(r#"tail call nonnull i32 (i32)* @foo(), !dbg !1200"#)),
             Ok((S(""), Stmt::DirectCall("foo")))
+        );
+
+        assert_eq!(
+            super::direct_call(S(r#"tail call i32 @llvm.bswap.i32(i32 %page.0.i) #9"#)),
+            Ok((S(""), Stmt::DirectCall("llvm.bswap.i32")))
         );
     }
 
