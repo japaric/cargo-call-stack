@@ -5,7 +5,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
-## [v0.1.2] - 2018-03-10
+## [v0.1.2] - 2018-03-11
 
 ### Added
 
@@ -30,6 +30,12 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 - Warning about `asm!` and llvm intrinsics will not be displayed more than once
   in the output.
+
+- Fixed miscellaneous parser bugs.
+
+- The tool will now correctly find the definition / declaration of aliased
+  Rust symbols; meaning that it will have type information for them and no
+  "no type information for `foo`" warning will be displayed.
 
 ## [v0.1.1] - 2019-03-03
 

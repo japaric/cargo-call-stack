@@ -480,7 +480,7 @@ fn run() -> Result<i32, failure::Error> {
                 .unwrap_or(false)
         };
 
-        if let Some(def) = defines.get(canonical_name) {
+        if let Some(def) = names.iter().filter_map(|name| defines.get(name)).next() {
             let is_object_safe = is_trait_method && {
                 match def.sig.inputs.first().as_ref() {
                     Some(Type::Pointer(ty)) => match **ty {
@@ -507,9 +507,10 @@ fn run() -> Result<i32, failure::Error> {
                     .callees
                     .insert(idx);
             }
-        } else if let Some(sig) = declares
-            .get(canonical_name)
-            .and_then(|decl| decl.sig.clone())
+        } else if let Some(sig) = names
+            .iter()
+            .filter_map(|name| declares.get(name).and_then(|decl| decl.sig.clone()))
+            .next()
         {
             // sanity check (?)
             assert!(!is_trait_method, "BUG: undefined trait method");
