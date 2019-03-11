@@ -607,8 +607,11 @@ fn run() -> Result<i32, failure::Error> {
     let mut llvm_seen = HashSet::new();
     // add edges
     let mut edges: HashMap<_, HashSet<_>> = HashMap::new(); // name -> [name]
+    let mut defined = HashSet::new(); // functions that are `define`-d in the LLVM-IR
     for define in defines.values() {
         let (caller, callees_seen) = if let Some(canonical_name) = aliases.get(&define.name) {
+            defined.insert(*canonical_name);
+
             (
                 indices[*canonical_name],
                 edges.entry(*canonical_name).or_default(),
@@ -846,13 +849,28 @@ fn run() -> Result<i32, failure::Error> {
 
                     let start = (address - stext) as usize;
                     let end = start + size as usize;
-                    let (bls, bs) = thumb::analyze(
+                    let (bls, bs, indirect) = thumb::analyze(
                         &text[start..end],
                         address as u32,
                         target_ == Target::Thumbv7m,
                         &tags,
                     );
                     let caller = indices[canonical_name];
+
+                    if !defined.contains(canonical_name) && indirect {
+                        // this function performs an indirect function call and we have no type
+                        // information to narrow down the list of callees so inject the uncertainty
+                        // in the form of a call to an unknown function with unknown stack usage
+
+                        warn!(
+                            "`{}` performs an indirect function call and there's \
+                             no type information about the operation",
+                            canonical_name,
+                        );
+                        let callee = g.add_node(Node("?", None));
+                        g.add_edge(caller, callee, ());
+                    }
+
                     let callees_seen = edges.entry(canonical_name).or_default();
                     for offset in bls {
                         let addr = (address as i64 + i64::from(offset)) as u64;

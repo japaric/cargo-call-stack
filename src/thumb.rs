@@ -1,8 +1,14 @@
-/// Analyzes a subroutine and returns all the `BL` instructions in it
+/// Analyzes a subroutine and returns all the `BL` and `B` instructions in it, plus whether this
+/// function performs an indirect function call or not
 // NOTE we assume that `bytes` is always valid input so all errors are bugs
 // Reference: ARMv7-M Architecture Reference Manual
 // TODO remove all `eprintln!`
-pub fn analyze(bytes: &[u8], address: u32, v7: bool, tags: &[(u32, Tag)]) -> (Vec<i32>, Vec<i32>) {
+pub fn analyze(
+    bytes: &[u8],
+    address: u32,
+    v7: bool,
+    tags: &[(u32, Tag)],
+) -> (Vec<i32>, Vec<i32>, bool) {
     macro_rules! bug {
         ($first:expr) => {
             panic!(
@@ -25,6 +31,7 @@ pub fn analyze(bytes: &[u8], address: u32, v7: bool, tags: &[(u32, Tag)]) -> (Ve
     // NOTE this implementation has been optimized to be easy to write, not to be high-performance
     let mut bls = vec![];
     let mut bs = vec![];
+    let mut indirect = false;
     let mut halfwords = bytes.chunks_exact(2).zip(0i32..);
     while let Some((first, i)) = halfwords.next() {
         let start = address + 2 * i as u32;
@@ -139,10 +146,15 @@ pub fn analyze(bytes: &[u8], address: u32, v7: bool, tags: &[(u32, Tag)]) -> (Ve
             continue;
         } else if matches(first, "0b010001_11_1_xxxx_000") {
             // A7.7.19  BLX (register) - T1
-            continue;
+            indirect = true;
         } else if matches(first, "0b010001_11_0_xxxx_000") {
             // A7.7.20  BX - T1
-            continue;
+            let rm = (first[0] >> 3) & 0b1111;
+
+            // `bx lr` is just a `return`
+            if rm != 0b1110 {
+                indirect = true;
+            }
         } else if v7 && matches(first, "0b1011_x_0_x_1_xxxxx_xxx") {
             // A7.7.21  CBNZ, CBZ - T1
             continue;
@@ -414,7 +426,7 @@ pub fn analyze(bytes: &[u8], address: u32, v7: bool, tags: &[(u32, Tag)]) -> (Ve
         }
     }
 
-    (bls, bs)
+    (bls, bs, indirect)
 }
 
 fn matches(bytes: &[u8], pattern: &str) -> bool {
@@ -472,7 +484,7 @@ mod tests {
         // UDF
         assert_eq!(
             super::analyze(&[0xfe, 0xde], 0, true, &[]),
-            (vec![], vec![])
+            (vec![], vec![], false)
         );
     }
 }
