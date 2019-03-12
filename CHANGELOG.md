@@ -5,7 +5,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
-## [v0.1.2] - 2018-03-11
+## [v0.1.2] - 2018-03-12
 
 ### Added
 
@@ -13,6 +13,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 - More stack usage information about compiler builtins cross compiled to
   ARMv{6,7}-M has been added.
+
+- The tool can now reason about the `core::fmt` API, which does some clever
+  tricks with function pointers (type erasure). This has been special cased
+  because the pattern can't be analyzed by just looking at types and function
+  signatures.
 
 ### Changed
 
