@@ -361,7 +361,22 @@ fn run() -> Result<i32, failure::Error> {
     let mut has_untyped_symbols = false;
     let mut addr2name = BTreeMap::new();
     for (names, (address, _, mut stack)) in &stack_sizes {
-        let canonical_name = names[0];
+        let canonical_name = if names.len() > 1 {
+            // pick the first name that's not a tag
+            names
+                .iter()
+                .filter_map(|&name| {
+                    if name == "$a" || name.starts_with("$a.") {
+                        None
+                    } else {
+                        Some(name)
+                    }
+                })
+                .next()
+                .expect("UNREACHABLE")
+        } else {
+            names[0]
+        };
         for name in names {
             aliases.insert(name, canonical_name);
         }
