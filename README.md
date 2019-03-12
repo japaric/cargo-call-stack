@@ -75,7 +75,7 @@ warning: assuming that asm!("") does *not* use the stack
 Graphviz's `dot` can then be used to generate an image from this dot file.
 
 ``` console
-$ dot -Tsvg -Nfontname='Fira Code' -Nshape=box cg.dot > cg.svg
+$ dot -Tsvg cg.dot > cg.svg
 ```
 
 [![Call graph with direct function calls](assets/direct.png)](https://japaric.github.io/cargo-call-stack/direct.svg)

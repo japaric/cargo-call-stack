@@ -1,10 +1,15 @@
-// #![deny(warnings)]
+#![deny(warnings)]
 
-use core::{cmp, fmt, iter, ops};
+use core::{
+    cmp,
+    fmt::{self, Write as _},
+    iter, ops,
+};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
     env, fs,
+    io::{self, Write},
     path::PathBuf,
     process::{self, Command},
     time::SystemTime,
@@ -17,10 +22,9 @@ use env_logger::{Builder, Env};
 use log::{error, warn};
 use petgraph::{
     algo,
-    dot::{Config, Dot},
     graph::{DiGraph, NodeIndex},
     visit::{Dfs, Reversed, Topo},
-    Direction,
+    Direction, Graph,
 };
 use xmas_elf::{sections::SectionData, symbol_table::Entry, ElfFile};
 
@@ -320,6 +324,8 @@ fn run() -> Result<i32, failure::Error> {
 
     let mut indirects: HashMap<FnSig, Indirect> = HashMap::new();
     let mut dynamics: HashMap<FnSig, Dynamic> = HashMap::new();
+    // functions that could be called by `ArgumentV1.formatter`
+    let mut fmts = HashSet::new();
 
     // Some functions may be aliased; we map aliases to a single name. For example, if `foo`,
     // `bar` and `baz` all have the same address then this maps contains: `foo -> foo`, `bar -> foo`
@@ -355,7 +361,22 @@ fn run() -> Result<i32, failure::Error> {
     let mut has_untyped_symbols = false;
     let mut addr2name = BTreeMap::new();
     for (names, (address, _, mut stack)) in &stack_sizes {
-        let canonical_name = names[0];
+        let canonical_name = if names.len() > 1 {
+            // pick the first name that's not a tag
+            names
+                .iter()
+                .filter_map(|&name| {
+                    if name == "$a" || name.starts_with("$a.") {
+                        None
+                    } else {
+                        Some(name)
+                    }
+                })
+                .next()
+                .expect("UNREACHABLE")
+        } else {
+            names[0]
+        };
         for name in names {
             aliases.insert(name, canonical_name);
         }
@@ -469,7 +490,7 @@ fn run() -> Result<i32, failure::Error> {
             *ambiguous.entry(dehashed.to_string()).or_insert(0) += 1;
         }
 
-        let idx = g.add_node(Node(canonical_name, stack));
+        let idx = g.add_node(Node(canonical_name, stack, false));
         indices.insert(canonical_name.into(), idx);
 
         // trait methods look like `<crate::module::Type as crate::module::Trait>::method::h$hash`
@@ -480,7 +501,19 @@ fn run() -> Result<i32, failure::Error> {
                 .unwrap_or(false)
         };
 
-        if let Some(def) = defines.get(canonical_name) {
+        if let Some(def) = names.iter().filter_map(|name| defines.get(name)).next() {
+            // if the signature is `fn(&_, &mut fmt::Formatter) -> fmt::Result`
+            match (&def.sig.inputs[..], def.sig.output.as_ref()) {
+                ([Type::Pointer(..), Type::Pointer(fmt)], Some(output))
+                    if **fmt == Type::Alias("core::fmt::Formatter")
+                        && **output == Type::Integer(1) =>
+                {
+                    fmts.insert(idx);
+                }
+
+                _ => {}
+            }
+
             let is_object_safe = is_trait_method && {
                 match def.sig.inputs.first().as_ref() {
                     Some(Type::Pointer(ty)) => match **ty {
@@ -507,9 +540,10 @@ fn run() -> Result<i32, failure::Error> {
                     .callees
                     .insert(idx);
             }
-        } else if let Some(sig) = declares
-            .get(canonical_name)
-            .and_then(|decl| decl.sig.clone())
+        } else if let Some(sig) = names
+            .iter()
+            .filter_map(|name| declares.get(name).and_then(|decl| decl.sig.clone()))
+            .next()
         {
             // sanity check (?)
             assert!(!is_trait_method, "BUG: undefined trait method");
@@ -606,8 +640,11 @@ fn run() -> Result<i32, failure::Error> {
     let mut llvm_seen = HashSet::new();
     // add edges
     let mut edges: HashMap<_, HashSet<_>> = HashMap::new(); // name -> [name]
+    let mut defined = HashSet::new(); // functions that are `define`-d in the LLVM-IR
     for define in defines.values() {
         let (caller, callees_seen) = if let Some(canonical_name) = aliases.get(&define.name) {
+            defined.insert(*canonical_name);
+
             (
                 indices[*canonical_name],
                 edges.entry(*canonical_name).or_default(),
@@ -637,7 +674,7 @@ fn run() -> Result<i32, failure::Error> {
                     } else {
                         warn!("no stack information for `{}`", sym);
 
-                        let idx = g.add_node(Node(sym, None));
+                        let idx = g.add_node(Node(sym, None, false));
                         indices.insert(Cow::Borrowed(sym), idx);
                         idx
                     };
@@ -845,13 +882,28 @@ fn run() -> Result<i32, failure::Error> {
 
                     let start = (address - stext) as usize;
                     let end = start + size as usize;
-                    let (bls, bs) = thumb::analyze(
+                    let (bls, bs, indirect) = thumb::analyze(
                         &text[start..end],
                         address as u32,
                         target_ == Target::Thumbv7m,
                         &tags,
                     );
                     let caller = indices[canonical_name];
+
+                    if !defined.contains(canonical_name) && indirect {
+                        // this function performs an indirect function call and we have no type
+                        // information to narrow down the list of callees so inject the uncertainty
+                        // in the form of a call to an unknown function with unknown stack usage
+
+                        warn!(
+                            "`{}` performs an indirect function call and there's \
+                             no type information about the operation",
+                            canonical_name,
+                        );
+                        let callee = g.add_node(Node("?", None, false));
+                        g.add_edge(caller, callee, ());
+                    }
+
                     let callees_seen = edges.entry(canonical_name).or_default();
                     for offset in bls {
                         let addr = (address as i64 + i64::from(offset)) as u64;
@@ -900,16 +952,90 @@ fn run() -> Result<i32, failure::Error> {
         );
     }
 
-    for (sig, indirect) in indirects {
+    // this is a bit weird but for some reason `ArgumentV1.formatter` sometimes lowers to different
+    // LLVM types. In theory it should always be: `i1 (*%fmt::Void, *&core::fmt::Formatter)*` but
+    // sometimes the type of the first argument is `%fmt::Void`, sometimes it's `%core::fmt::Void`,
+    // sometimes is `%core::fmt::Void.12` and on occasion it's even `%SomeRandomType`
+    //
+    // To cope with this weird fact the following piece of code will try to find the right LLVM
+    // type.
+    let all_maybe_void = indirects
+        .keys()
+        .filter_map(|sig| match (&sig.inputs[..], sig.output.as_ref()) {
+            ([Type::Pointer(receiver), Type::Pointer(formatter)], Some(output))
+                if **formatter == Type::Alias("core::fmt::Formatter")
+                    && **output == Type::Integer(1) =>
+            {
+                if let Type::Alias(receiver) = **receiver {
+                    Some(receiver)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let one_true_void = if all_maybe_void.contains(&"fmt::Void") {
+        Some("fmt::Void")
+    } else {
+        all_maybe_void
+            .iter()
+            .filter_map(|maybe_void| {
+                // this could be `core::fmt::Void` or `core::fmt::Void.12`
+                if maybe_void.starts_with("core::fmt::Void") {
+                    Some(*maybe_void)
+                } else {
+                    None
+                }
+            })
+            .next()
+            .or_else(|| {
+                if all_maybe_void.len() == 1 {
+                    // we got a random type!
+                    Some(all_maybe_void[0])
+                } else {
+                    None
+                }
+            })
+    };
+
+    for (mut sig, indirect) in indirects {
         if !indirect.called {
             continue;
         }
+
+        let callees = if let Some(one_true_void) = one_true_void {
+            match (&sig.inputs[..], sig.output.as_ref()) {
+                // special case: this is `ArgumentV1.formatter` a pseudo trait object
+                ([Type::Pointer(void), Type::Pointer(fmt)], Some(output))
+                    if **void == Type::Alias(one_true_void)
+                        && **fmt == Type::Alias("core::fmt::Formatter")
+                        && **output == Type::Integer(1) =>
+                {
+                    if fmts.is_empty() {
+                        error!("BUG? no callees for `{}`", sig.to_string());
+                    }
+
+                    // canonicalize the signature
+                    if one_true_void != "fmt::Void" {
+                        sig.inputs[0] = Type::Alias("fmt::Void");
+                    }
+
+                    &fmts
+                }
+
+                _ => &indirect.callees,
+            }
+        } else {
+            &indirect.callees
+        };
 
         let mut name = sig.to_string();
         // append '*' to denote that this is a function pointer
         name.push('*');
 
-        let call = g.add_node(Node(name.clone(), Some(0)));
+        let call = g.add_node(Node(name.clone(), Some(0), true));
 
         for caller in &indirect.callers {
             g.add_edge(*caller, call, ());
@@ -917,15 +1043,15 @@ fn run() -> Result<i32, failure::Error> {
 
         if has_untyped_symbols {
             // add an edge between this and a potential extern / untyped symbol
-            let extern_sym = g.add_node(Node("?", None));
+            let extern_sym = g.add_node(Node("?", None, false));
             g.add_edge(call, extern_sym, ());
         } else {
-            if indirect.callees.is_empty() {
+            if callees.is_empty() {
                 error!("BUG? no callees for `{}`", name);
             }
         }
 
-        for callee in &indirect.callees {
+        for callee in callees {
             g.add_edge(call, *callee, ());
         }
     }
@@ -942,7 +1068,7 @@ fn run() -> Result<i32, failure::Error> {
             error!("BUG? no callees for `{}`", name);
         }
 
-        let call = g.add_node(Node(name, Some(0)));
+        let call = g.add_node(Node(name, Some(0), true));
         for caller in &dynamic.callers {
             g.add_edge(*caller, call, ());
         }
@@ -1110,9 +1236,101 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
-    println!("{:?}", Dot::with_config(&g, &[Config::EdgeNoLabel]));
+    dot(g)?;
 
     Ok(0)
+}
+
+fn dot(g: Graph<Node, ()>) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+
+    writeln!(stdout, "digraph {{")?;
+    writeln!(stdout, "    node [fontname=monospace shape=box]")?;
+
+    for (i, node) in g.raw_nodes().iter().enumerate() {
+        let node = &node.weight;
+
+        write!(stdout, "    {} [label=\"", i,)?;
+
+        let mut escaper = Escaper::new(&mut stdout);
+        write!(escaper, "{}", rustc_demangle::demangle(&node.name)).ok();
+        escaper.error?;
+
+        if let Some(max) = node.max {
+            write!(stdout, "\\nmax {}", max)?;
+        }
+
+        write!(stdout, "\\nlocal = {}\"", node.local,)?;
+
+        if node.dashed {
+            write!(stdout, " style=dashed")?;
+        }
+
+        writeln!(stdout, "]")?;
+    }
+
+    for edge in g.raw_edges() {
+        writeln!(
+            stdout,
+            "    {} -> {}",
+            edge.source().index(),
+            edge.target().index()
+        )?;
+    }
+
+    writeln!(stdout, "}}")
+}
+
+struct Escaper<W>
+where
+    W: io::Write,
+{
+    writer: W,
+    error: io::Result<()>,
+}
+
+impl<W> Escaper<W>
+where
+    W: io::Write,
+{
+    fn new(writer: W) -> Self {
+        Escaper {
+            writer,
+            error: Ok(()),
+        }
+    }
+}
+
+impl<W> fmt::Write for Escaper<W>
+where
+    W: io::Write,
+{
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for c in s.chars() {
+            self.write_char(c)?;
+        }
+
+        Ok(())
+    }
+
+    fn write_char(&mut self, c: char) -> fmt::Result {
+        match (|| -> io::Result<()> {
+            match c {
+                '"' => write!(self.writer, "\\")?,
+                _ => {}
+            }
+
+            write!(self.writer, "{}", c)
+        })() {
+            Err(e) => {
+                self.error = Err(e);
+
+                Err(fmt::Error)
+            }
+            Ok(()) => Ok(()),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1120,31 +1338,11 @@ struct Node<'a> {
     name: Cow<'a, str>,
     local: Local,
     max: Option<Max>,
-}
-
-impl fmt::Debug for Node<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let Some(max) = self.max {
-            write!(
-                f,
-                "{}\\nmax {}\\nlocal = {}",
-                rustc_demangle::demangle(&*self.name),
-                max,
-                self.local
-            )
-        } else {
-            write!(
-                f,
-                "{}\\nlocal = {}",
-                rustc_demangle::demangle(&*self.name),
-                self.local
-            )
-        }
-    }
+    dashed: bool,
 }
 
 #[allow(non_snake_case)]
-fn Node<'a, S>(name: S, stack: Option<u64>) -> Node<'a>
+fn Node<'a, S>(name: S, stack: Option<u64>, dashed: bool) -> Node<'a>
 where
     S: Into<Cow<'a, str>>,
 {
@@ -1152,6 +1350,7 @@ where
         name: name.into(),
         local: stack.map(Local::Exact).unwrap_or(Local::Unknown),
         max: None,
+        dashed,
     }
 }
 

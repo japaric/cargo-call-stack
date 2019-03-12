@@ -5,7 +5,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
-## [v0.1.2] - 2018-03-10
+## [v0.1.2] - 2018-03-12
 
 ### Added
 
@@ -13,6 +13,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 - More stack usage information about compiler builtins cross compiled to
   ARMv{6,7}-M has been added.
+
+- The tool can now reason about the `core::fmt` API, which does some clever
+  tricks with function pointers (type erasure). This has been special cased
+  because the pattern can't be analyzed by just looking at types and function
+  signatures.
 
 ### Changed
 
@@ -23,6 +28,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
   `__aeabi_memcpy4` or machine code) and binary blobs, like
   `libcompiler_builtins.rlib`, for which the tool doesn't have LLVM-IR.
 
+- The default dot style for nodes is the "box" shape and the "monospace" font.
+
+- The fictitious nodes used for function pointer calls and dynamic dispatch are
+  now rendered as dashed boexs.
+
 ### Fixed
 
 - The tool will not crash when encountering functions that contain floating
@@ -30,6 +40,12 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 - Warning about `asm!` and llvm intrinsics will not be displayed more than once
   in the output.
+
+- Fixed miscellaneous parser bugs.
+
+- The tool will now correctly find the definition / declaration of aliased
+  Rust symbols; meaning that it will have type information for them and no
+  "no type information for `foo`" warning will be displayed.
 
 ## [v0.1.1] - 2019-03-03
 
