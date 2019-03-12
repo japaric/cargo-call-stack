@@ -28,6 +28,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
   `__aeabi_memcpy4` or machine code) and binary blobs, like
   `libcompiler_builtins.rlib`, for which the tool doesn't have LLVM-IR.
 
+- The default dot style for nodes is the "box" shape and the "monospace" font.
+
+- The fictitious nodes used for function pointer calls and dynamic dispatch are
+  now rendered as dashed boexs.
+
 ### Fixed
 
 - The tool will not crash when encountering functions that contain floating

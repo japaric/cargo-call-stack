@@ -1,10 +1,15 @@
-// #![deny(warnings)]
+#![deny(warnings)]
 
-use core::{cmp, fmt, iter, ops};
+use core::{
+    cmp,
+    fmt::{self, Write as _},
+    iter, ops,
+};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
     env, fs,
+    io::{self, Write},
     path::PathBuf,
     process::{self, Command},
     time::SystemTime,
@@ -17,10 +22,9 @@ use env_logger::{Builder, Env};
 use log::{error, warn};
 use petgraph::{
     algo,
-    dot::{Config, Dot},
     graph::{DiGraph, NodeIndex},
     visit::{Dfs, Reversed, Topo},
-    Direction,
+    Direction, Graph,
 };
 use xmas_elf::{sections::SectionData, symbol_table::Entry, ElfFile};
 
@@ -471,7 +475,7 @@ fn run() -> Result<i32, failure::Error> {
             *ambiguous.entry(dehashed.to_string()).or_insert(0) += 1;
         }
 
-        let idx = g.add_node(Node(canonical_name, stack));
+        let idx = g.add_node(Node(canonical_name, stack, false));
         indices.insert(canonical_name.into(), idx);
 
         // trait methods look like `<crate::module::Type as crate::module::Trait>::method::h$hash`
@@ -655,7 +659,7 @@ fn run() -> Result<i32, failure::Error> {
                     } else {
                         warn!("no stack information for `{}`", sym);
 
-                        let idx = g.add_node(Node(sym, None));
+                        let idx = g.add_node(Node(sym, None, false));
                         indices.insert(Cow::Borrowed(sym), idx);
                         idx
                     };
@@ -881,7 +885,7 @@ fn run() -> Result<i32, failure::Error> {
                              no type information about the operation",
                             canonical_name,
                         );
-                        let callee = g.add_node(Node("?", None));
+                        let callee = g.add_node(Node("?", None, false));
                         g.add_edge(caller, callee, ());
                     }
 
@@ -1016,7 +1020,7 @@ fn run() -> Result<i32, failure::Error> {
         // append '*' to denote that this is a function pointer
         name.push('*');
 
-        let call = g.add_node(Node(name.clone(), Some(0)));
+        let call = g.add_node(Node(name.clone(), Some(0), true));
 
         for caller in &indirect.callers {
             g.add_edge(*caller, call, ());
@@ -1024,7 +1028,7 @@ fn run() -> Result<i32, failure::Error> {
 
         if has_untyped_symbols {
             // add an edge between this and a potential extern / untyped symbol
-            let extern_sym = g.add_node(Node("?", None));
+            let extern_sym = g.add_node(Node("?", None, false));
             g.add_edge(call, extern_sym, ());
         } else {
             if callees.is_empty() {
@@ -1049,7 +1053,7 @@ fn run() -> Result<i32, failure::Error> {
             error!("BUG? no callees for `{}`", name);
         }
 
-        let call = g.add_node(Node(name, Some(0)));
+        let call = g.add_node(Node(name, Some(0), true));
         for caller in &dynamic.callers {
             g.add_edge(*caller, call, ());
         }
@@ -1217,9 +1221,101 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
-    println!("{:?}", Dot::with_config(&g, &[Config::EdgeNoLabel]));
+    dot(g)?;
 
     Ok(0)
+}
+
+fn dot(g: Graph<Node, ()>) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+
+    writeln!(stdout, "digraph {{")?;
+    writeln!(stdout, "    node [fontname=monospace shape=box]")?;
+
+    for (i, node) in g.raw_nodes().iter().enumerate() {
+        let node = &node.weight;
+
+        write!(stdout, "    {} [label=\"", i,)?;
+
+        let mut escaper = Escaper::new(&mut stdout);
+        write!(escaper, "{}", rustc_demangle::demangle(&node.name)).ok();
+        escaper.error?;
+
+        if let Some(max) = node.max {
+            write!(stdout, "\\nmax {}", max)?;
+        }
+
+        write!(stdout, "\\nlocal = {}\"", node.local,)?;
+
+        if node.dashed {
+            write!(stdout, " style=dashed")?;
+        }
+
+        writeln!(stdout, "]")?;
+    }
+
+    for edge in g.raw_edges() {
+        writeln!(
+            stdout,
+            "    {} -> {}",
+            edge.source().index(),
+            edge.target().index()
+        )?;
+    }
+
+    writeln!(stdout, "}}")
+}
+
+struct Escaper<W>
+where
+    W: io::Write,
+{
+    writer: W,
+    error: io::Result<()>,
+}
+
+impl<W> Escaper<W>
+where
+    W: io::Write,
+{
+    fn new(writer: W) -> Self {
+        Escaper {
+            writer,
+            error: Ok(()),
+        }
+    }
+}
+
+impl<W> fmt::Write for Escaper<W>
+where
+    W: io::Write,
+{
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for c in s.chars() {
+            self.write_char(c)?;
+        }
+
+        Ok(())
+    }
+
+    fn write_char(&mut self, c: char) -> fmt::Result {
+        match (|| -> io::Result<()> {
+            match c {
+                '"' => write!(self.writer, "\\")?,
+                _ => {}
+            }
+
+            write!(self.writer, "{}", c)
+        })() {
+            Err(e) => {
+                self.error = Err(e);
+
+                Err(fmt::Error)
+            }
+            Ok(()) => Ok(()),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1227,31 +1323,11 @@ struct Node<'a> {
     name: Cow<'a, str>,
     local: Local,
     max: Option<Max>,
-}
-
-impl fmt::Debug for Node<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let Some(max) = self.max {
-            write!(
-                f,
-                "{}\\nmax {}\\nlocal = {}",
-                rustc_demangle::demangle(&*self.name),
-                max,
-                self.local
-            )
-        } else {
-            write!(
-                f,
-                "{}\\nlocal = {}",
-                rustc_demangle::demangle(&*self.name),
-                self.local
-            )
-        }
-    }
+    dashed: bool,
 }
 
 #[allow(non_snake_case)]
-fn Node<'a, S>(name: S, stack: Option<u64>) -> Node<'a>
+fn Node<'a, S>(name: S, stack: Option<u64>, dashed: bool) -> Node<'a>
 where
     S: Into<Cow<'a, str>>,
 {
@@ -1259,6 +1335,7 @@ where
         name: name.into(),
         local: stack.map(Local::Exact).unwrap_or(Local::Unknown),
         max: None,
+        dashed,
     }
 }
 
