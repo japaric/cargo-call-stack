@@ -1,14 +1,15 @@
 /// Analyzes a subroutine and returns all the `BL` and `B` instructions in it, plus whether this
 /// function performs an indirect function call or not
 // NOTE we assume that `bytes` is always valid input so all errors are bugs
-// Reference: ARMv7-M Architecture Reference Manual
+// Reference: ARMv7-M Architecture Reference Manual (ARM DDI 0403E.b)
+// Reference: ARMv6-M Architecture Reference Manual (ARM DDI 0419D)
 // TODO remove all `eprintln!`
 pub fn analyze(
     bytes: &[u8],
     address: u32,
     v7: bool,
     tags: &[(u32, Tag)],
-) -> (Vec<i32>, Vec<i32>, bool) {
+) -> (Vec<i32>, Vec<i32>, bool, bool) {
     macro_rules! bug {
         ($first:expr) => {
             panic!(
@@ -24,6 +25,16 @@ pub fn analyze(
             );
         };
     }
+
+    // we want to know if any of the instructions modifies the SP (stack pointer). We use this
+    // information to determine if the subroutine uses stack space or not. We want to detect the
+    // following instructions:
+    // - b081            sub     sp, #4
+    // - b580            push    {r7, lr}
+    // - e92d 41f0       stmdb   sp!, {r4, r5, r6, r7, r8, lr}
+    // - ed2d 8b02       vpush   {d8}
+    // - f5ad 7d02       sub.w   sp, sp, #520    ; 0x208
+    let mut modifies_sp = false;
 
     // we want to avoid writing a full blown decoder since we are only interested in a single type
     // of instruction. We know that instructions can be 16-bit or 32-bit so we'll only decode 16-bit
@@ -239,8 +250,9 @@ pub fn analyze(
         } else if matches(first, "0b010000_1111_xxx_xxx") {
             // A7.7.85  MVN (register) - T1
             continue;
-        } else if v7 && matches(first, "0b1011_1111_0000_0000") {
-            // A7.7.87  NOP - T1
+        } else if matches(first, "0b1011_1111_0000_0000") {
+            // A7.7.87  NOP - T1 (in ARMv7-M-ARM)
+            // A6.7.47  NOP - T1 (in ARMv6-M-ARM)
             continue;
         } else if matches(first, "0b010000_1100_xxx_xxx") {
             // A7.7.91  ORR (register) - T1
@@ -250,6 +262,8 @@ pub fn analyze(
             continue;
         } else if matches(first, "0b1011_0_10_x_xxxxxxxx") {
             // A7.7.99  PUSH - T1
+            // e.g. 'b580            push    {r7, lr}'
+            modifies_sp = true;
             continue;
         } else if matches(first, "0b1011_1010_00_xxx_xxx") {
             // A7.7.111  REV - T1
@@ -307,6 +321,8 @@ pub fn analyze(
             continue;
         } else if matches(first, "0b1011_0000_1_xxxxxxx") {
             // A7.7.173      SUB (SP minus immediate) - T1
+            // e.g. 'b081            sub     sp, #4'
+            modifies_sp = true;
             continue;
         } else if matches(first, "0b1011_0010_01_xxx_xxx") {
             // A7.7.179      SXTB - T1
@@ -335,7 +351,40 @@ pub fn analyze(
         } else {
             let second = halfwords.next().unwrap_or_else(|| bug!(first)).0;
 
+            const SP: u8 = 0b1101;
+
             if v7
+                && matches(first, "0b11101_00_100_x_0_xxxx")
+                && matches(second, "0b0_x_0_xxxxxxxxxxxxx")
+            {
+                // A7.7.157      STMDB, STMFD
+                // e.g. 'e92d 41f0       stmdb   sp!, {r4, r5, r6, r7, r8, lr}'
+                let rn = first[0] & 0b1111;
+                if rn == SP {
+                    modifies_sp = true;
+                }
+            } else if v7
+                && matches(first, "0b11110_x_0_1101_x_1101")
+                && matches(second, "0b0_xxx_xxxx_xxxxxxxx")
+            {
+                // A7.7.173      SUB (SP minus immediate) - T2
+                let rd = second[1] & 0b1111;
+                if rd == SP {
+                    modifies_sp = true;
+                }
+            } else if v7
+                && matches(first, "0b1110_110_1_0_x_1_0_1101")
+                && matches(second, "0bxxxx_1011_xxxxxxxx")
+            {
+                // A7.7.249      VPUSH - T1
+                modifies_sp = true;
+            } else if v7
+                && matches(first, "0b1110_110_1_0_x_1_0_1101")
+                && matches(second, "0bxxxx_1010_xxxxxxxx")
+            {
+                // A7.7.249      VPUSH - T2
+                modifies_sp = true;
+            } else if v7
                 && matches(first, "0b11110_x_xxxxxxxxxx")
                 && matches(second, "0b10_x_0_x_xxxxxxxxxxx")
             {
@@ -426,7 +475,7 @@ pub fn analyze(
         }
     }
 
-    (bls, bs, indirect)
+    (bls, bs, indirect, modifies_sp)
 }
 
 fn matches(bytes: &[u8], pattern: &str) -> bool {
@@ -484,7 +533,28 @@ mod tests {
         // UDF
         assert_eq!(
             super::analyze(&[0xfe, 0xde], 0, true, &[]),
-            (vec![], vec![], false)
+            (vec![], vec![], false, false)
         );
+    }
+
+    #[test]
+    fn modifies_sp() {
+        // bf00            nop
+        assert!(!super::analyze(&[0x00, 0xbf], 0, false, &[]).3);
+
+        // b081            sub     sp, #4
+        assert!(super::analyze(&[0x81, 0xb0], 0, false, &[]).3);
+
+        // b580            push    {r7, lr}
+        assert!(super::analyze(&[0x80, 0xb5], 0, false, &[]).3);
+
+        // e92d 41f0       stmdb   sp!, {r4, r5, r6, r7, r8, lr}
+        assert!(super::analyze(&[0x2d, 0xe9, 0xf0, 0x41], 0, true, &[]).3);
+
+        // ed2d 8b02       vpush   {d8}
+        assert!(super::analyze(&[0x2d, 0xed, 0x02, 0x8b], 0, true, &[]).3);
+
+        // f5ad 7d02       sub.w   sp, sp, #520    ; 0x208
+        assert!(super::analyze(&[0xad, 0xf5, 0x02, 0x7d], 0, true, &[]).3);
     }
 }

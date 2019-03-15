@@ -5,6 +5,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The tool now estimates the stack usage of symbols in binary blobs (which come
+from C code and assembly files). Right now it can only identify zero stack usage.
+
 ## [v0.1.2] - 2019-03-12
 
 ### Added
