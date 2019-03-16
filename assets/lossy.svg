@@ -13,17 +13,17 @@
 <g id="node1" class="node">
 <title>0</title>
 <polygon fill="none" stroke="#000000" points="151,-231 60,-231 60,-178 151,-178 151,-231"/>
-<text text-anchor="middle" x="105.5" y="-215.8" font-family="Fira Code" font-size="14.00" fill="#000000">main</text>
-<text text-anchor="middle" x="105.5" y="-200.8" font-family="Fira Code" font-size="14.00" fill="#000000">max = 24</text>
-<text text-anchor="middle" x="105.5" y="-185.8" font-family="Fira Code" font-size="14.00" fill="#000000">local = 8</text>
+<text text-anchor="middle" x="105.5" y="-215.8" font-family="monospace" font-size="14.00" fill="#000000">main</text>
+<text text-anchor="middle" x="105.5" y="-200.8" font-family="monospace" font-size="14.00" fill="#000000">max = 24</text>
+<text text-anchor="middle" x="105.5" y="-185.8" font-family="monospace" font-size="14.00" fill="#000000">local = 8</text>
 </g>
 <!-- 1 -->
 <g id="node2" class="node">
 <title>1</title>
-<polygon fill="none" stroke="#000000" points="198,-142 107,-142 107,-89 198,-89 198,-142"/>
-<text text-anchor="middle" x="152.5" y="-126.8" font-family="Fira Code" font-size="14.00" fill="#000000">i32 ()*</text>
-<text text-anchor="middle" x="152.5" y="-111.8" font-family="Fira Code" font-size="14.00" fill="#000000">max = 16</text>
-<text text-anchor="middle" x="152.5" y="-96.8" font-family="Fira Code" font-size="14.00" fill="#000000">local = 0</text>
+<polygon fill="none" stroke="#000000" stroke-dasharray="5,2" points="198,-142 107,-142 107,-89 198,-89 198,-142"/>
+<text text-anchor="middle" x="152.5" y="-126.8" font-family="monospace" font-size="14.00" fill="#000000">i32 ()*</text>
+<text text-anchor="middle" x="152.5" y="-111.8" font-family="monospace" font-size="14.00" fill="#000000">max = 16</text>
+<text text-anchor="middle" x="152.5" y="-96.8" font-family="monospace" font-size="14.00" fill="#000000">local = 0</text>
 </g>
 <!-- 0&#45;&gt;1 -->
 <g id="edge1" class="edge">
@@ -35,9 +35,9 @@
 <g id="node3" class="node">
 <title>2</title>
 <polygon fill="none" stroke="#000000" points="99,-53 0,-53 0,0 99,0 99,-53"/>
-<text text-anchor="middle" x="49.5" y="-37.8" font-family="Fira Code" font-size="14.00" fill="#000000">app::baz</text>
-<text text-anchor="middle" x="49.5" y="-22.8" font-family="Fira Code" font-size="14.00" fill="#000000">max = 16</text>
-<text text-anchor="middle" x="49.5" y="-7.8" font-family="Fira Code" font-size="14.00" fill="#000000">local = 16</text>
+<text text-anchor="middle" x="49.5" y="-37.8" font-family="monospace" font-size="14.00" fill="#000000">app::baz</text>
+<text text-anchor="middle" x="49.5" y="-22.8" font-family="monospace" font-size="14.00" fill="#000000">max = 16</text>
+<text text-anchor="middle" x="49.5" y="-7.8" font-family="monospace" font-size="14.00" fill="#000000">local = 16</text>
 </g>
 <!-- 0&#45;&gt;2 -->
 <g id="edge2" class="edge">
@@ -46,7 +46,7 @@
 <polygon fill="#000000" stroke="#000000" points="64.1893,-61.5281 57.8495,-53.0395 57.5119,-63.6289 64.1893,-61.5281"/>
 </g>
 <!-- 1&#45;&gt;2 -->
-<g id="edge4" class="edge">
+<g id="edge3" class="edge">
 <title>1&#45;&gt;2</title>
 <path fill="none" stroke="#000000" d="M121.5966,-88.7971C111.1064,-79.7327 99.2511,-69.4888 88.2288,-59.9647"/>
 <polygon fill="#000000" stroke="#000000" points="90.2365,-57.0739 80.3816,-53.1841 85.6598,-62.3705 90.2365,-57.0739"/>
@@ -55,12 +55,12 @@
 <g id="node4" class="node">
 <title>3</title>
 <polygon fill="none" stroke="#000000" points="208,-53 117,-53 117,0 208,0 208,-53"/>
-<text text-anchor="middle" x="162.5" y="-37.8" font-family="Fira Code" font-size="14.00" fill="#000000">app::foo</text>
-<text text-anchor="middle" x="162.5" y="-22.8" font-family="Fira Code" font-size="14.00" fill="#000000">max = 8</text>
-<text text-anchor="middle" x="162.5" y="-7.8" font-family="Fira Code" font-size="14.00" fill="#000000">local = 8</text>
+<text text-anchor="middle" x="162.5" y="-37.8" font-family="monospace" font-size="14.00" fill="#000000">app::foo</text>
+<text text-anchor="middle" x="162.5" y="-22.8" font-family="monospace" font-size="14.00" fill="#000000">max = 8</text>
+<text text-anchor="middle" x="162.5" y="-7.8" font-family="monospace" font-size="14.00" fill="#000000">local = 8</text>
 </g>
 <!-- 1&#45;&gt;3 -->
-<g id="edge3" class="edge">
+<g id="edge4" class="edge">
 <title>1&#45;&gt;3</title>
 <path fill="none" stroke="#000000" d="M155.5003,-88.7971C156.4001,-80.7887 157.4034,-71.8597 158.3629,-63.3198"/>
 <polygon fill="#000000" stroke="#000000" points="161.8632,-63.5124 159.5018,-53.1841 154.907,-62.7307 161.8632,-63.5124"/>
@@ -69,9 +69,9 @@
 <g id="node5" class="node">
 <title>4</title>
 <polygon fill="none" stroke="#000000" points="317,-53 226,-53 226,0 317,0 317,-53"/>
-<text text-anchor="middle" x="271.5" y="-37.8" font-family="Fira Code" font-size="14.00" fill="#000000">app::bar</text>
-<text text-anchor="middle" x="271.5" y="-22.8" font-family="Fira Code" font-size="14.00" fill="#000000">max = 0</text>
-<text text-anchor="middle" x="271.5" y="-7.8" font-family="Fira Code" font-size="14.00" fill="#000000">local = 0</text>
+<text text-anchor="middle" x="271.5" y="-37.8" font-family="monospace" font-size="14.00" fill="#000000">app::bar</text>
+<text text-anchor="middle" x="271.5" y="-22.8" font-family="monospace" font-size="14.00" fill="#000000">max = 0</text>
+<text text-anchor="middle" x="271.5" y="-7.8" font-family="monospace" font-size="14.00" fill="#000000">local = 0</text>
 </g>
 <!-- 1&#45;&gt;4 -->
 <g id="edge5" class="edge">
