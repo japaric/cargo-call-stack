@@ -478,7 +478,7 @@ fn run() -> Result<i32, failure::Error> {
                     "ad-hoc: injecting stack usage information for `{}` (last checked: Rust {})",
                     canonical_name, VERS
                 );
-            } else {
+            } else if !target_.is_thumb() {
                 warn!("no stack usage information for `{}`", canonical_name);
             }
         } else {
@@ -882,13 +882,31 @@ fn run() -> Result<i32, failure::Error> {
 
                     let start = (address - stext) as usize;
                     let end = start + size as usize;
-                    let (bls, bs, indirect) = thumb::analyze(
+                    let (bls, bs, indirect, modifies_sp) = thumb::analyze(
                         &text[start..end],
                         address as u32,
                         target_ == Target::Thumbv7m,
                         &tags,
                     );
                     let caller = indices[canonical_name];
+
+                    // check the correctness of `modifies_sp`
+                    if let Local::Exact(stack) = g[caller].local {
+                        assert_eq!(
+                            stack != 0,
+                            modifies_sp,
+                            "BUG: LLVM reported that `{}` uses {} bytes of stack but this doesn't \
+                             match our analysis",
+                            canonical_name,
+                            stack
+                        );
+                    }
+
+                    if !modifies_sp {
+                        g[caller].local = Local::Exact(0);
+                    } else if g[caller].local == Local::Unknown {
+                        warn!("no stack usage information for `{}`", canonical_name);
+                    }
 
                     if !defined.contains(canonical_name) && indirect {
                         // this function performs an indirect function call and we have no type
@@ -1355,7 +1373,7 @@ where
 }
 
 /// Local stack usage
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum Local {
     Exact(u64),
     Unknown,

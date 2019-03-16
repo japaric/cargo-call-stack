@@ -113,7 +113,8 @@ named!(attribute<CompleteStr, Attribute>, do_parse!(
             => do_parse!(char!('(') >> digit >> char!(')') >> (())) |
         CompleteStr("align") => do_parse!(space >> digit >> (())) |
         // have this branch always error because this is not an attribute but part of a type
-        CompleteStr("void") => do_parse!(none_of!(" ") >> (())) |
+        CompleteStr("double") |CompleteStr("float") | CompleteStr("void") =>
+            do_parse!(none_of!(" ") >> (())) |
         // have this branch always error because there are not attributes but operations
         CompleteStr("bitcast") | CompleteStr("getelementptr") => do_parse!(none_of!(" ") >> (())) |
         // have this branch always error because there are not attributes but keywords

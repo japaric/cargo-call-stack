@@ -1,0 +1,18 @@
+[package]
+authors = ["Jorge Aparicio <jorge@japaric.io>"]
+edition = "2018"
+readme = "README.md"
+name = "app"
+version = "0.1.0"
+
+[dependencies]
+cortex-m = "0.5.8"
+cortex-m-rt = "0.6.5"
+cortex-m-semihosting = "0.3.2"
+panic-halt = "0.2.0"
+spin = "0.5.0"
+
+[profile.release]
+codegen-units = 1
+debug = true
+lto = true

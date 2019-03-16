@@ -373,6 +373,11 @@ mod tests {
                 Parameter(Type::Pointer(Box::new(Type::Alias("jnet::mac::Addr"))))
             ))
         );
+
+        assert_eq!(
+            super::parameter(S(r#"float"#)),
+            Ok((S(""), Parameter(Type::Float)))
+        );
     }
 
     #[test]
@@ -476,6 +481,33 @@ start:
                                 output: None,
                             })
                         )))))),
+                    },
+                }
+            ))
+        );
+
+        assert_eq!(
+            super::parse(S(
+                r#"define internal fastcc float @_ZN3app3foo17h3337355bfdc88d96E(float) unnamed_addr #0 !dbg !1183 {
+start:
+  call void @llvm.dbg.value(metadata float %0, metadata !1187, metadata !DIExpression()), !dbg !1188
+  %1 = fmul float %0, 0x3FF19999A0000000, !dbg !1189
+  ret float %1, !dbg !1190
+}"#
+            )),
+            Ok((
+                S(""),
+                Define {
+                    name: "_ZN3app3foo17h3337355bfdc88d96E",
+                    stmts: vec![
+                        Stmt::Label,
+                        Stmt::DirectCall("llvm.dbg.value"),
+                        Stmt::Other,
+                        Stmt::Other,
+                    ],
+                    sig: FnSig {
+                        inputs: vec![Type::Float],
+                        output: Some(Box::new(Type::Float)),
                     },
                 }
             ))
