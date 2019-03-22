@@ -10,6 +10,25 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 - The tool now estimates the stack usage of symbols in binary blobs (which come
 from C code and assembly files). Right now it can only identify zero stack usage.
 
+## [v0.1.3] - 2019-03-22
+
+### Changed
+
+- Linker script magic is no longer required. All call graphs produced by
+  `cargo-call-stack` will include stack usage information.
+
+- `cargo-call-stack` now always forces a rebuild -- the Cargo caching behavior
+  makes it hard to locate the object file that contains the stack usage
+  information.
+
+- `cargo-call-stack` will now load the `compiler-builtins` rlib and extract
+  stack usage information from it, if it contains any.
+
+### Fixed
+
+- Some cases where the call graph included duplicated edges (i.e. more than one
+  edge from A to B).
+
 ## [v0.1.2] - 2019-03-12
 
 ### Added

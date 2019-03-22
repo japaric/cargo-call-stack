@@ -31,10 +31,10 @@ working with a nightly toolchain at any time. You have been warned!
 
 [`-Z emit-stack-sizes`]: https://doc.rust-lang.org/nightly/unstable-book/compiler-flags/emit-stack-sizes.html
 
-- If there's at least some stack usage information available then the *maximum
-  stack usage* of each function is also computed, or at least a lower bound is
-  provided. Maximum stack usage of a function here refers to the stack usage
-  that includes the stack used by functions that the function may invoke.
+- The *maximum stack usage* of each function is also computed, or at least a
+  lower bound is provided. Maximum stack usage of a function here refers to the
+  stack usage that includes the stack used by functions that the function may
+  invoke.
 
 - The tool has *imperfect* support for calls through function pointers (`fn()`)
   and dynamic dispatch (`dyn Trait`). You *will* get a call graph from programs
@@ -54,15 +54,6 @@ $ cargo +stable install cargo-call-stack
 The tool builds your program in release mode with LTO enabled, analyses it and
 then prints a dot file to stdout. See `cargo call-stack -h` for a list of build
 options (e.g. `--features`).
-
-**IMPORTANT**: As the author of the program you must ensure that the
-`.stack_sizes` section survives the linker (doesn't get GC-ed). Unfortunately we
-can't do that for you because tweaking the linking process from Cargo is tricky
-and error prone. If you are using the [`cortex-m-rt`] crate then everything will
-Just Work. But if you are not then you'll need to use a linker script; see the
-documentation on [`-Z emit-stack-sizes`] for more information. If you don't
-preserve the `.stack_sizes` then the tool will have zero information about the
-stack usage of your program.
 
 [`cortex-m-rt`]: https://crates.io/crates/cortex-m-rt
 

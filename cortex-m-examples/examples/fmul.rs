@@ -1,4 +1,3 @@
-#![feature(asm)]
 #![no_main]
 #![no_std]
 
