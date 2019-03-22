@@ -24,6 +24,9 @@ from C code and assembly files). Right now it can only identify zero stack usage
 - `cargo-call-stack` will now load the `compiler-builtins` rlib and extract
   stack usage information from it, if it contains any.
 
+- Nodes that form a cycle are now grouped in a cluster to make them easier to
+  spot.
+
 ### Fixed
 
 - Some cases where the call graph included duplicated edges (i.e. more than one

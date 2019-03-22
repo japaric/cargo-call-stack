@@ -49,6 +49,9 @@ fn main() -> Result<(), failure::Error> {
     }
 }
 
+// Font used in the dot graphs
+const FONT: &str = "monospace";
+
 // Version we analyzed to extract some ad-hoc information
 const VERS: &str = "1.33.0"; // compiler-builtins = "0.1.4"
 
@@ -1211,6 +1214,7 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
+    let mut cycles = vec![];
     if !has_stack_usage_info {
         error!("The graph has zero stack usage information; skipping max stack usage analysis");
     } else if algo::is_cyclic_directed(&g) {
@@ -1225,6 +1229,8 @@ fn run() -> Result<i32, failure::Error> {
                     .any(|n| n == first);
 
             if is_a_cycle {
+                cycles.push(scc.clone());
+
                 let mut scc_local =
                     max_of(scc.iter().map(|node| g[*node].local.into())).expect("UNREACHABLE");
 
@@ -1301,17 +1307,17 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
-    dot(g)?;
+    dot(g, &cycles)?;
 
     Ok(0)
 }
 
-fn dot(g: Graph<Node, ()>) -> io::Result<()> {
+fn dot(g: Graph<Node, ()>, cycles: &[Vec<NodeIndex>]) -> io::Result<()> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
 
     writeln!(stdout, "digraph {{")?;
-    writeln!(stdout, "    node [fontname=monospace shape=box]")?;
+    writeln!(stdout, "    node [fontname={} shape=box]", FONT)?;
 
     for (i, node) in g.raw_nodes().iter().enumerate() {
         let node = &node.weight;
@@ -1342,6 +1348,19 @@ fn dot(g: Graph<Node, ()>) -> io::Result<()> {
             edge.source().index(),
             edge.target().index()
         )?;
+    }
+
+    for (i, cycle) in cycles.iter().enumerate() {
+        writeln!(stdout, "\n    subgraph cluster_{} {{", i)?;
+        writeln!(stdout, "        style=dashed")?;
+        writeln!(stdout, "        fontname={}", FONT)?;
+        writeln!(stdout, "        label=\"SCC{}\"", i)?;
+
+        for node in cycle {
+            writeln!(stdout, "        {}", node.index())?;
+        }
+
+        writeln!(stdout, "    }}")?;
     }
 
     writeln!(stdout, "}}")
