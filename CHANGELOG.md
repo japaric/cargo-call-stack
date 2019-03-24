@@ -27,6 +27,10 @@ from C code and assembly files). Right now it can only identify zero stack usage
 - Nodes that form a cycle are now grouped in a cluster to make them easier to
   spot.
 
+- `cargo-call-stack` now computes the stack usage of Thumb functions that don't
+  contain branches. This is useful for getting stack information on `#[naked]`
+  functions that use `asm!` and `global_asm!`-defined symbols.
+
 ### Fixed
 
 - Some cases where the call graph included duplicated edges (i.e. more than one

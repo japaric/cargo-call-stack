@@ -933,7 +933,7 @@ fn run() -> Result<i32, failure::Error> {
 
                 let start = (address - stext) as usize;
                 let end = start + size as usize;
-                let (bls, bs, indirect, modifies_sp) = thumb::analyze(
+                let (bls, bs, indirect, modifies_sp, our_stack) = thumb::analyze(
                     &text[start..end],
                     address,
                     target_ == Target::Thumbv7m,
@@ -941,21 +941,62 @@ fn run() -> Result<i32, failure::Error> {
                 );
                 let caller = indices[canonical_name];
 
-                // check the correctness of `modifies_sp`
-                if let Local::Exact(stack) = g[caller].local {
+                // sanity check
+                if let Some(stack) = our_stack {
                     assert_eq!(
                         stack != 0,
+                        modifies_sp,
+                        "BUG: our analysis reported that `{}` both uses {} bytes of stack and \
+                         it does{} modify SP",
+                        canonical_name,
+                        stack,
+                        if !modifies_sp { " not" } else { "" }
+                    );
+                }
+
+                // check the correctness of `modifies_sp` and `our_stack`
+                // also override LLVM's results when they appear to be wrong
+                if let Local::Exact(ref mut llvm_stack) = g[caller].local {
+                    if let Some(stack) = our_stack {
+                        if *llvm_stack == 0 && stack != 0 {
+                            // this could be a `#[naked]` + `asm!` function or `global_asm!`
+
+                            warn!(
+                                "LLVM reported zero stack usage for `{}` but \
+                                 our analysis reported {} bytes; overriding LLVM's result",
+                                canonical_name, stack
+                            );
+
+                            *llvm_stack = stack;
+                        } else {
+                            // in all other cases our results should match
+
+                            assert_eq!(
+                                *llvm_stack, stack,
+                                "BUG: LLVM reported that `{}` uses {} bytes of stack but \
+                                 this doesn't match our analysis",
+                                canonical_name, stack
+                            );
+                        }
+                    }
+
+                    assert_eq!(
+                        *llvm_stack != 0,
                         modifies_sp,
                         "BUG: LLVM reported that `{}` uses {} bytes of stack but this doesn't \
                          match our analysis",
                         canonical_name,
-                        stack
+                        *llvm_stack
                     );
+                } else if let Some(stack) = our_stack {
+                    g[caller].local = Local::Exact(stack);
+                } else if !modifies_sp {
+                    // this happens when the function contains intra-branches and our analysis gives
+                    // up (`our_stack == None`)
+                    g[caller].local = Local::Exact(0);
                 }
 
-                if !modifies_sp {
-                    g[caller].local = Local::Exact(0);
-                } else if g[caller].local == Local::Unknown {
+                if g[caller].local == Local::Unknown {
                     warn!("no stack usage information for `{}`", canonical_name);
                 }
 
@@ -1172,7 +1213,6 @@ fn run() -> Result<i32, failure::Error> {
             }
         });
 
-        // TODO do partial match / ignore trailing hash
         if let Some(start) = start {
             // create a new graph that only contains nodes reachable from `start`
             let mut g2 = DiGraph::<Node, ()>::new();
