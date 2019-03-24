@@ -1,24 +1,26 @@
-#![deny(warnings)]
+// #![deny(warnings)]
 
 use core::{
     cmp,
     fmt::{self, Write as _},
-    iter, ops,
+    ops, str,
 };
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
-    env, fs,
-    io::{self, Write},
-    path::PathBuf,
+    env,
+    fs::{self, File},
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
     process::{self, Command},
     time::SystemTime,
 };
 
+use ar::Archive;
 use cargo_project::{Artifact, Profile, Project};
 use clap::{crate_authors, crate_version, App, Arg};
-use either::Either;
 use env_logger::{Builder, Env};
+use filetime::FileTime;
 use log::{error, warn};
 use petgraph::{
     algo,
@@ -26,6 +28,7 @@ use petgraph::{
     visit::{Dfs, Reversed, Topo},
     Direction, Graph,
 };
+use walkdir::WalkDir;
 use xmas_elf::{sections::SectionData, symbol_table::Entry, ElfFile};
 
 use crate::{
@@ -45,6 +48,9 @@ fn main() -> Result<(), failure::Error> {
         }
     }
 }
+
+// Font used in the dot graphs
+const FONT: &str = "monospace";
 
 // Version we analyzed to extract some ad-hoc information
 const VERS: &str = "1.33.0"; // compiler-builtins = "0.1.4"
@@ -150,7 +156,7 @@ fn run() -> Result<i32, failure::Error> {
     cargo.args(&[
         "--",
         // .ll file
-        "--emit=llvm-ir",
+        "--emit=llvm-ir,obj",
         // needed to produce a single .ll file
         "-C",
         "lto",
@@ -158,6 +164,30 @@ fn run() -> Result<i32, failure::Error> {
         "-Z",
         "emit-stack-sizes",
     ]);
+
+    let cwd = env::current_dir()?;
+    let project = Project::query(cwd)?;
+
+    // "touch" some source file to trigger a rebuild
+    let root = project.toml().parent().expect("UNREACHABLE");
+    let now = FileTime::from_system_time(SystemTime::now());
+    if !filetime::set_file_times(root.join("src/main.rs"), now, now).is_ok() {
+        if !filetime::set_file_times(root.join("src/lib.rs"), now, now).is_ok() {
+            // look for some rust source file and "touch" it
+            let src = root.join("src");
+            let haystack = if src.exists() { &src } else { root };
+
+            for entry in WalkDir::new(haystack) {
+                let entry = entry?;
+                let path = entry.path();
+
+                if path.extension().map(|ext| ext == "rs").unwrap_or(false) {
+                    filetime::set_file_times(path, now, now)?;
+                    break;
+                }
+            }
+        }
+    }
 
     if verbose {
         eprintln!("{:?}", cargo);
@@ -169,12 +199,9 @@ fn run() -> Result<i32, failure::Error> {
         return Ok(status.code().unwrap_or(1));
     }
 
-    let cwd = env::current_dir()?;
-
     let meta = rustc_version::version_meta()?;
     let host = meta.host;
 
-    let project = Project::query(cwd)?;
     let mut path: PathBuf = if is_example {
         project.path(Artifact::Example(file), profile, target_flag, &host)?
     } else {
@@ -220,7 +247,11 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
-    let ll = fs::read_to_string(ll.expect("unreachable"))?;
+    let ll = ll.expect("unreachable");
+    let obj = ll.with_extension("o");
+    let ll = fs::read_to_string(ll)?;
+    let obj = fs::read(obj)?;
+
     let items = crate::ir::parse(&ll)?;
     let mut defines = HashMap::new();
     let mut declares = HashMap::new();
@@ -238,86 +269,93 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
-    // TODO add `unwrap_or(host)` where `host` comes from `rustc_version`
-    let target = project.target().or(target_flag);
+    let target = project.target().or(target_flag).unwrap_or(&host);
 
     // we know how to analyze the machine code in the ELF file for these targets thus we have more
     // information and need less LLVM-IR hacks
-    let target_ = match target.unwrap_or("") {
+    let target_ = match target {
         "thumbv6m-none-eabi" => Target::Thumbv6m,
         "thumbv7m-none-eabi" | "thumbv7em-none-eabi" | "thumbv7em-none-eabihf" => Target::Thumbv7m,
         _ => Target::Other,
     };
 
     // extract stack size information
-    let stack_sizes: Vec<_> = match stack_sizes::analyze(&elf)? {
-        Either::Left(fs) => fs
-            .iter()
-            .flat_map(|f| {
-                let address = f.address().map(u64::from).map(|addr| {
-                    if target_.is_thumb() {
-                        // clear the thumb bit
-                        addr & !1
-                    } else {
-                        addr
-                    }
-                });
+    // the `.o` file doesn't have address information so we just keep the stack usage information
+    let mut stack_sizes: HashMap<_, _> = stack_sizes::analyze_object(&obj)?
+        .into_iter()
+        .map(|(name, stack)| (name.to_owned(), stack))
+        .collect();
 
-                if address.is_none() {
-                    // undefined / external symbols; these are *not* aliased
+    // extract stack usage info from `libcompiler-builtins.rlib`
+    let sysroot_nl = String::from_utf8(
+        Command::new("rustc")
+            .args(&["--print", "sysroot"])
+            .output()?
+            .stdout,
+    )?;
+    // remove trailing newline
+    let sysroot = Path::new(sysroot_nl.trim_end());
+    let libdir = sysroot.join("lib/rustlib").join(target).join("lib");
 
-                    let stack = f.stack();
-                    let size = f.size();
-                    Either::Left(f.names().iter().map(move |name| {
-                        // these symbols may contain a version string (e.g. `@@GLIBC_2.2.5`) that must
-                        // be removed
-                        if let Some(name) = name.rsplit("@@").nth(1) {
-                            (vec![name], (address, size, stack))
-                        } else {
-                            (vec![*name], (address, size, stack))
-                        }
-                    }))
-                } else {
-                    Either::Right(iter::once((
-                        f.names().to_owned(),
-                        (address, f.size(), f.stack()),
-                    )))
+    for entry in fs::read_dir(libdir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().map(|ext| ext == "rlib").unwrap_or(false)
+            && path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(|stem| stem.starts_with("libcompiler_builtins"))
+                .unwrap_or(false)
+        {
+            let mut ar = Archive::new(File::open(path)?);
+
+            let mut buf = vec![];
+            while let Some(entry) = ar.next_entry() {
+                let mut entry = entry?;
+                let header = entry.header();
+
+                if str::from_utf8(header.identifier())
+                    .map(|id| id.contains("compiler_builtins") && id.ends_with(".o"))
+                    .unwrap_or(false)
+                {
+                    buf.clear();
+                    entry.read_to_end(&mut buf)?;
+                    stack_sizes.extend(
+                        stack_sizes::analyze_object(&buf)?
+                            .into_iter()
+                            .map(|(name, stack)| (name.to_owned(), stack)),
+                    );
                 }
-            })
-            .collect(),
+            }
+        }
+    }
 
-        // same as above (because reasons)
-        Either::Right(fs) => fs
-            .iter()
-            .flat_map(|f| {
-                let address = f.address().map(|addr| {
-                    if target_.is_thumb() {
-                        // clear the thumb bit
-                        addr & !1
-                    } else {
-                        addr
-                    }
-                });
+    // extract list of "live" symbols (symbols that have not been GC-ed by the linker)
+    // this time we use the ELF and not the object file
+    let mut symbols = stack_sizes::analyze_executable(&elf)?;
 
-                if address.is_none() {
-                    let stack = f.stack();
-                    let size = f.size();
-                    Either::Left(f.names().iter().map(move |name| {
-                        if let Some(name) = name.rsplit("@@").nth(1) {
-                            (vec![name], (address, size, stack))
-                        } else {
-                            (vec![*name], (address, size, stack))
-                        }
-                    }))
-                } else {
-                    Either::Right(iter::once((
-                        f.names().to_owned(),
-                        (address, f.size(), f.stack()),
-                    )))
-                }
-            })
-            .collect(),
-    };
+    // clear the thumb bit
+    if target_.is_thumb() {
+        symbols.defined = symbols
+            .defined
+            .into_iter()
+            .map(|(k, v)| (k & !1, v))
+            .collect();
+    }
+
+    // remove version strings from undefined symbols
+    symbols.undefined = symbols
+        .undefined
+        .into_iter()
+        .map(|sym| {
+            if let Some(name) = sym.rsplit("@@").nth(1) {
+                name
+            } else {
+                sym
+            }
+        })
+        .collect();
 
     let mut g = DiGraph::<Node, ()>::new();
     let mut indices = BTreeMap::<Cow<str>, _>::new();
@@ -360,38 +398,44 @@ fn run() -> Result<i32, failure::Error> {
     let mut has_stack_usage_info = false;
     let mut has_untyped_symbols = false;
     let mut addr2name = BTreeMap::new();
-    for (names, (address, _, mut stack)) in &stack_sizes {
+    for (address, sym) in &symbols.defined {
+        let names = sym.names();
+
         let canonical_name = if names.len() > 1 {
-            // pick the first name that's not a tag
-            names
-                .iter()
-                .filter_map(|&name| {
-                    if name == "$a" || name.starts_with("$a.") {
-                        None
-                    } else {
-                        Some(name)
-                    }
-                })
-                .next()
-                .expect("UNREACHABLE")
+            // if one of the aliases appears in the `stack_sizes` dictionary, use that
+            if let Some(needle) = names.iter().find(|name| stack_sizes.contains_key(&***name)) {
+                needle
+            } else {
+                // otherwise, pick the first name that's not a tag
+                names
+                    .iter()
+                    .filter_map(|&name| {
+                        if name == "$a" || name.starts_with("$a.") {
+                            None
+                        } else {
+                            Some(name)
+                        }
+                    })
+                    .next()
+                    .expect("UNREACHABLE")
+            }
         } else {
             names[0]
         };
+
         for name in names {
             aliases.insert(name, canonical_name);
         }
 
-        if let Some(addr) = address {
-            let _out = addr2name.insert(addr, canonical_name);
-            debug_assert!(_out.is_none());
-        }
+        let _out = addr2name.insert(address, canonical_name);
+        debug_assert!(_out.is_none());
 
+        let mut stack = stack_sizes.get(canonical_name).cloned();
         if stack.is_none() {
-            // here we inject some target specific information we get from analyzing
+            // here we inject some target specific information we got from analyzing
             // `libcompiler_builtins.rlib`
 
-            let t = target.unwrap_or("");
-            let ad_hoc = match t {
+            let ad_hoc = match target {
                 "thumbv6m-none-eabi" => match canonical_name {
                     "__aeabi_memcpy" | "__aeabi_memset" | "__aeabi_memclr" | "__aeabi_memclr4"
                     | "__aeabi_f2uiz" => {
@@ -450,18 +494,18 @@ fn run() -> Result<i32, failure::Error> {
                         "__aeabi_f2iz" | "__aeabi_f2uiz" | "__aeabi_fadd" | "__aeabi_fcmpgt"
                         | "__aeabi_fcmplt" | "__aeabi_fdiv" | "__aeabi_fmul" | "__aeabi_fsub"
                         | "__aeabi_i2f" | "__aeabi_ui2f"
-                            if t == "thumbv7m-none-eabi" =>
+                            if target == "thumbv7m-none-eabi" =>
                         {
                             stack = Some(0);
                             true
                         }
 
-                        "__addsf3" | "__mulsf3" if t == "thumbv7m-none-eabi" => {
+                        "__addsf3" | "__mulsf3" if target == "thumbv7m-none-eabi" => {
                             stack = Some(16);
                             true
                         }
 
-                        "__divsf3" if t == "thumbv7m-none-eabi" => {
+                        "__divsf3" if target == "thumbv7m-none-eabi" => {
                             stack = Some(20);
                             true
                         }
@@ -627,6 +671,25 @@ fn run() -> Result<i32, failure::Error> {
                     indirects.entry(sig).or_default().callees.insert(idx);
                 }
 
+                "__divmoddi4" | "__udivmoddi4" => {
+                    // `fn({i,u}64, {i,u}64, *{i,u}64) -> {i,u}64`
+                    let sig = FnSig {
+                        inputs: vec![
+                            Type::Integer(64),
+                            Type::Integer(64),
+                            Type::Pointer(Box::new(Type::Integer(64))),
+                        ],
+                        output: Some(Box::new(Type::Integer(64))),
+                    };
+                    indirects.entry(sig).or_default().callees.insert(idx);
+                }
+
+                "__aeabi_uldivmod" | "__aeabi_ldivmod" => {
+                    // these subroutines don't use a standard calling convention and are impossible
+                    // to call from Rust code (they can be called via `asm!` though). This case is
+                    // listed here to suppress the warning below
+                }
+
                 _ => {
                     has_untyped_symbols = true;
                     warn!("no type information for `{}`", canonical_name);
@@ -639,16 +702,14 @@ fn run() -> Result<i32, failure::Error> {
     let mut asm_seen = HashSet::new();
     let mut llvm_seen = HashSet::new();
     // add edges
-    let mut edges: HashMap<_, HashSet<_>> = HashMap::new(); // name -> [name]
+    let mut edges: HashMap<_, HashSet<_>> = HashMap::new(); // NodeIdx -> [NodeIdx]
     let mut defined = HashSet::new(); // functions that are `define`-d in the LLVM-IR
     for define in defines.values() {
         let (caller, callees_seen) = if let Some(canonical_name) = aliases.get(&define.name) {
             defined.insert(*canonical_name);
 
-            (
-                indices[*canonical_name],
-                edges.entry(*canonical_name).or_default(),
-            )
+            let idx = indices[*canonical_name];
+            (idx, edges.entry(idx).or_default())
         } else {
             // this symbol was GC-ed by the linker, skip
             continue;
@@ -704,10 +765,10 @@ fn run() -> Result<i32, failure::Error> {
                         continue;
                     }
 
-                    let mut call = |callee, name| {
-                        if !callees_seen.contains(name) {
+                    let mut call = |callee| {
+                        if !callees_seen.contains(&callee) {
                             g.add_edge(caller, callee, ());
-                            callees_seen.insert(name);
+                            callees_seen.insert(callee);
                         }
                     };
 
@@ -721,16 +782,16 @@ fn run() -> Result<i32, failure::Error> {
                     // TODO? consider the `len` argument to elide the call to `*mem*`
                     if func.starts_with("llvm.memcpy.") {
                         if let Some(callee) = indices.get("memcpy") {
-                            call(*callee, "memcpy");
+                            call(*callee);
                         }
 
                         // ARMv7-R and the like use these
                         if let Some(callee) = indices.get("__aeabi_memcpy") {
-                            call(*callee, "__aeabi_memcpy");
+                            call(*callee);
                         }
 
                         if let Some(callee) = indices.get("__aeabi_memcpy4") {
-                            call(*callee, "__aeabi_memcpy4");
+                            call(*callee);
                         }
 
                         continue;
@@ -740,28 +801,28 @@ fn run() -> Result<i32, failure::Error> {
                     // TODO? consider the `len` argument to elide the call to `*mem*`
                     if func.starts_with("llvm.memset.") || func.starts_with("llvm.memmove.") {
                         if let Some(callee) = indices.get("memset") {
-                            call(*callee, "memset");
+                            call(*callee);
                         }
 
                         // ARMv7-R and the like use these
                         if let Some(callee) = indices.get("__aeabi_memset") {
-                            call(*callee, "__aeabi_memset");
+                            call(*callee);
                         }
 
                         if let Some(callee) = indices.get("__aeabi_memset4") {
-                            call(*callee, "__aeabi_memset4");
+                            call(*callee);
                         }
 
                         if let Some(callee) = indices.get("memclr") {
-                            call(*callee, "memclr");
+                            call(*callee);
                         }
 
                         if let Some(callee) = indices.get("__aeabi_memclr") {
-                            call(*callee, "__aeabi_memclr");
+                            call(*callee);
                         }
 
                         if let Some(callee) = indices.get("__aeabi_memclr4") {
-                            call(*callee, "__aeabi_memclr4");
+                            call(*callee);
                         }
 
                         continue;
@@ -788,14 +849,27 @@ fn run() -> Result<i32, failure::Error> {
                     );
 
                     // use canonical name
-                    let func = aliases
-                        .get(func)
-                        .unwrap_or_else(|| panic!("BUG: callee `{}` is unknown", func));
+                    let callee = if let Some(canon) = aliases.get(func) {
+                        indices[*canon]
+                    } else {
+                        assert!(
+                            symbols.undefined.contains(func),
+                            "BUG: callee `{}` is unknown",
+                            func
+                        );
 
-                    let callee = indices[*func];
+                        if let Some(idx) = indices.get(*func) {
+                            *idx
+                        } else {
+                            let idx = g.add_node(Node(*func, None, false));
+                            indices.insert((*func).into(), idx);
 
-                    if !callees_seen.contains(func) {
-                        callees_seen.insert(func);
+                            idx
+                        }
+                    };
+
+                    if !callees_seen.contains(&callee) {
+                        callees_seen.insert(callee);
                         g.add_edge(caller, callee, ());
                     }
                 }
@@ -830,15 +904,14 @@ fn run() -> Result<i32, failure::Error> {
     // disambiguate from the LLVM-IR (e.g. does this `llvm.memcpy` lower to a call to
     // `__aebi_memcpy`, a call to `__aebi_memcpy4` or machine instructions?)
     if target_.is_thumb() {
-        let ef = ElfFile::new(&elf).map_err(failure::err_msg)?;
-
-        let sect = ef.find_section_by_name(".symtab").expect("UNREACHABLE");
-        let mut tags: Vec<_> = match sect.get_data(&ef).unwrap() {
+        let elf = ElfFile::new(&elf).map_err(failure::err_msg)?;
+        let sect = elf.find_section_by_name(".symtab").expect("UNREACHABLE");
+        let mut tags: Vec<_> = match sect.get_data(&elf).unwrap() {
             SectionData::SymbolTable32(entries) => entries
                 .iter()
                 .filter_map(|entry| {
                     let addr = entry.value() as u32;
-                    entry.get_name(&ef).ok().and_then(|name| {
+                    entry.get_name(&elf).ok().and_then(|name| {
                         if name.starts_with("$d") {
                             Some((addr, Tag::Data))
                         } else if name.starts_with("$t") {
@@ -854,107 +927,144 @@ fn run() -> Result<i32, failure::Error> {
 
         tags.sort_by(|a, b| a.0.cmp(&b.0));
 
-        if let Some(sect) = ef.find_section_by_name(".text") {
-            let stext = sect.address();
-            let text = sect.raw_data(&ef);
+        if let Some(sect) = elf.find_section_by_name(".text") {
+            let stext = sect.address() as u32;
+            let text = sect.raw_data(&elf);
 
-            for (names, (address, mut size, _)) in &stack_sizes {
-                if let Some(address) = address {
-                    // clear the thumb bit
-                    let address = *address & !1;
-                    let canonical_name = names[0];
+            for (address, sym) in &symbols.defined {
+                let address = *address as u32;
+                let canonical_name = aliases[&sym.names()[0]];
+                let mut size = sym.size() as u32;
 
-                    if size == 0 {
-                        // try harder at finding out the size of this symbol
-                        if let Ok(needle) =
-                            tags.binary_search_by(|tag| tag.0.cmp(&(address as u32)))
-                        {
-                            let start = tags[needle];
-                            if start.1 == Tag::Thumb {
-                                if let Some(end) = tags.get(needle + 1) {
-                                    if end.1 == Tag::Thumb {
-                                        size = u64::from(end.0 - start.0);
-                                    }
+                if size == 0 {
+                    // try harder at finding out the size of this symbol
+                    if let Ok(needle) = tags.binary_search_by(|tag| tag.0.cmp(&address)) {
+                        let start = tags[needle];
+                        if start.1 == Tag::Thumb {
+                            if let Some(end) = tags.get(needle + 1) {
+                                if end.1 == Tag::Thumb {
+                                    size = end.0 - start.0;
                                 }
                             }
                         }
                     }
+                }
 
-                    let start = (address - stext) as usize;
-                    let end = start + size as usize;
-                    let (bls, bs, indirect, modifies_sp) = thumb::analyze(
-                        &text[start..end],
-                        address as u32,
-                        target_ == Target::Thumbv7m,
-                        &tags,
+                let start = (address - stext) as usize;
+                let end = start + size as usize;
+                let (bls, bs, indirect, modifies_sp, our_stack) = thumb::analyze(
+                    &text[start..end],
+                    address,
+                    target_ == Target::Thumbv7m,
+                    &tags,
+                );
+                let caller = indices[canonical_name];
+
+                // sanity check
+                if let Some(stack) = our_stack {
+                    assert_eq!(
+                        stack != 0,
+                        modifies_sp,
+                        "BUG: our analysis reported that `{}` both uses {} bytes of stack and \
+                         it does{} modify SP",
+                        canonical_name,
+                        stack,
+                        if !modifies_sp { " not" } else { "" }
                     );
-                    let caller = indices[canonical_name];
+                }
 
-                    // check the correctness of `modifies_sp`
-                    if let Local::Exact(stack) = g[caller].local {
-                        assert_eq!(
-                            stack != 0,
-                            modifies_sp,
-                            "BUG: LLVM reported that `{}` uses {} bytes of stack but this doesn't \
-                             match our analysis",
-                            canonical_name,
-                            stack
-                        );
+                // check the correctness of `modifies_sp` and `our_stack`
+                // also override LLVM's results when they appear to be wrong
+                if let Local::Exact(ref mut llvm_stack) = g[caller].local {
+                    if let Some(stack) = our_stack {
+                        if *llvm_stack == 0 && stack != 0 {
+                            // this could be a `#[naked]` + `asm!` function or `global_asm!`
+
+                            warn!(
+                                "LLVM reported zero stack usage for `{}` but \
+                                 our analysis reported {} bytes; overriding LLVM's result",
+                                canonical_name, stack
+                            );
+
+                            *llvm_stack = stack;
+                        } else {
+                            // in all other cases our results should match
+
+                            assert_eq!(
+                                *llvm_stack, stack,
+                                "BUG: LLVM reported that `{}` uses {} bytes of stack but \
+                                 this doesn't match our analysis",
+                                canonical_name, stack
+                            );
+                        }
                     }
 
-                    if !modifies_sp {
-                        g[caller].local = Local::Exact(0);
-                    } else if g[caller].local == Local::Unknown {
-                        warn!("no stack usage information for `{}`", canonical_name);
-                    }
+                    assert_eq!(
+                        *llvm_stack != 0,
+                        modifies_sp,
+                        "BUG: LLVM reported that `{}` uses {} bytes of stack but this doesn't \
+                         match our analysis",
+                        canonical_name,
+                        *llvm_stack
+                    );
+                } else if let Some(stack) = our_stack {
+                    g[caller].local = Local::Exact(stack);
+                } else if !modifies_sp {
+                    // this happens when the function contains intra-branches and our analysis gives
+                    // up (`our_stack == None`)
+                    g[caller].local = Local::Exact(0);
+                }
 
-                    if !defined.contains(canonical_name) && indirect {
-                        // this function performs an indirect function call and we have no type
-                        // information to narrow down the list of callees so inject the uncertainty
-                        // in the form of a call to an unknown function with unknown stack usage
+                if g[caller].local == Local::Unknown {
+                    warn!("no stack usage information for `{}`", canonical_name);
+                }
 
-                        warn!(
-                            "`{}` performs an indirect function call and there's \
-                             no type information about the operation",
-                            canonical_name,
-                        );
-                        let callee = g.add_node(Node("?", None, false));
+                if !defined.contains(canonical_name) && indirect {
+                    // this function performs an indirect function call and we have no type
+                    // information to narrow down the list of callees so inject the uncertainty
+                    // in the form of a call to an unknown function with unknown stack usage
+
+                    warn!(
+                        "`{}` performs an indirect function call and there's \
+                         no type information about the operation",
+                        canonical_name,
+                    );
+                    let callee = g.add_node(Node("?", None, false));
+                    g.add_edge(caller, callee, ());
+                }
+
+                let callees_seen = edges.entry(caller).or_default();
+                for offset in bls {
+                    let addr = (address as i64 + i64::from(offset)) as u64;
+                    // address may be off by one due to the thumb bit being set
+                    let name = addr2name
+                        .get(&addr)
+                        .unwrap_or_else(|| panic!("BUG? no symbol at address {}", addr));
+
+                    let callee = indices[*name];
+                    if !callees_seen.contains(&callee) {
                         g.add_edge(caller, callee, ());
+                        callees_seen.insert(callee);
                     }
+                }
 
-                    let callees_seen = edges.entry(canonical_name).or_default();
-                    for offset in bls {
-                        let addr = (address as i64 + i64::from(offset)) as u64;
+                for offset in bs {
+                    let addr = (address as i32 + offset) as u32;
+
+                    if addr >= address && addr < (address + size) {
+                        // intra-function B branches are not function calls
+                    } else {
                         // address may be off by one due to the thumb bit being set
                         let name = addr2name
-                            .get(&addr)
+                            .get(&(addr as u64))
                             .unwrap_or_else(|| panic!("BUG? no symbol at address {}", addr));
 
-                        if !callees_seen.contains(name) {
-                            g.add_edge(caller, indices[*name], ());
-                            callees_seen.insert(name);
+                        let callee = indices[*name];
+                        if !callees_seen.contains(&callee) {
+                            g.add_edge(caller, callee, ());
+                            callees_seen.insert(callee);
                         }
                     }
-
-                    for offset in bs {
-                        let addr = (address as i64 + i64::from(offset)) as u64;
-
-                        if addr >= address && addr < (address + size) {
-                            // intra-function B branches are not function calls
-                        } else {
-                            // address may be off by one due to the thumb bit being set
-                            let name = addr2name
-                                .get(&addr)
-                                .unwrap_or_else(|| panic!("BUG? no symbol at address {}", addr));
-
-                            if !callees_seen.contains(name) {
-                                g.add_edge(caller, indices[*name], ());
-                                callees_seen.insert(name);
-                            }
-                        }
-                    }
-                } else {
-                    // ignore external symbols
                 }
             }
         } else {
@@ -1122,7 +1232,6 @@ fn run() -> Result<i32, failure::Error> {
             }
         });
 
-        // TODO do partial match / ignore trailing hash
         if let Some(start) = start {
             // create a new graph that only contains nodes reachable from `start`
             let mut g2 = DiGraph::<Node, ()>::new();
@@ -1164,6 +1273,7 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
+    let mut cycles = vec![];
     if !has_stack_usage_info {
         error!("The graph has zero stack usage information; skipping max stack usage analysis");
     } else if algo::is_cyclic_directed(&g) {
@@ -1178,6 +1288,8 @@ fn run() -> Result<i32, failure::Error> {
                     .any(|n| n == first);
 
             if is_a_cycle {
+                cycles.push(scc.clone());
+
                 let mut scc_local =
                     max_of(scc.iter().map(|node| g[*node].local.into())).expect("UNREACHABLE");
 
@@ -1254,17 +1366,17 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
-    dot(g)?;
+    dot(g, &cycles)?;
 
     Ok(0)
 }
 
-fn dot(g: Graph<Node, ()>) -> io::Result<()> {
+fn dot(g: Graph<Node, ()>, cycles: &[Vec<NodeIndex>]) -> io::Result<()> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
 
     writeln!(stdout, "digraph {{")?;
-    writeln!(stdout, "    node [fontname=monospace shape=box]")?;
+    writeln!(stdout, "    node [fontname={} shape=box]", FONT)?;
 
     for (i, node) in g.raw_nodes().iter().enumerate() {
         let node = &node.weight;
@@ -1295,6 +1407,19 @@ fn dot(g: Graph<Node, ()>) -> io::Result<()> {
             edge.source().index(),
             edge.target().index()
         )?;
+    }
+
+    for (i, cycle) in cycles.iter().enumerate() {
+        writeln!(stdout, "\n    subgraph cluster_{} {{", i)?;
+        writeln!(stdout, "        style=dashed")?;
+        writeln!(stdout, "        fontname={}", FONT)?;
+        writeln!(stdout, "        label=\"SCC{}\"", i)?;
+
+        for node in cycle {
+            writeln!(stdout, "        {}", node.index())?;
+        }
+
+        writeln!(stdout, "    }}")?;
     }
 
     writeln!(stdout, "}}")

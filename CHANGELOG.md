@@ -5,10 +5,31 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.3] - 2019-03-24
+
 ### Changed
 
-- The tool now estimates the stack usage of symbols in binary blobs (which come
-from C code and assembly files). Right now it can only identify zero stack usage.
+- Linker script magic is no longer required. All call graphs produced by
+  `cargo-call-stack` will include stack usage information.
+
+- `cargo-call-stack` now always forces a rebuild -- the Cargo caching behavior
+  makes it hard to locate the object file that contains the stack usage
+  information.
+
+- `cargo-call-stack` will now load the `compiler-builtins` rlib and extract
+  stack usage information from it, if it contains any.
+
+- Nodes that form a cycle are now grouped in a cluster to make them easier to
+  spot.
+
+- `cargo-call-stack` now computes the stack usage of Thumb functions that don't
+  contain branches. This is useful for getting stack information on `#[naked]`
+  functions that use `asm!` and `global_asm!`-defined symbols.
+
+### Fixed
+
+- Some cases where the call graph included duplicated edges (i.e. more than one
+  edge from A to B).
 
 ## [v0.1.2] - 2019-03-12
 
@@ -95,6 +116,7 @@ from C code and assembly files). Right now it can only identify zero stack usage
 
 Initial release
 
-[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.3...HEAD
+[v0.1.3]: https://github.com/japaric/cargo-call-stack/compare/v0.1.2...v0.1.3
 [v0.1.2]: https://github.com/japaric/cargo-call-stack/compare/v0.1.1...v0.1.2
 [v0.1.1]: https://github.com/japaric/cargo-call-stack/compare/v0.1.0...v0.1.1

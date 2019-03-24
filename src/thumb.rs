@@ -3,13 +3,12 @@
 // NOTE we assume that `bytes` is always valid input so all errors are bugs
 // Reference: ARMv7-M Architecture Reference Manual (ARM DDI 0403E.b)
 // Reference: ARMv6-M Architecture Reference Manual (ARM DDI 0419D)
-// TODO remove all `eprintln!`
 pub fn analyze(
     bytes: &[u8],
     address: u32,
     v7: bool,
     tags: &[(u32, Tag)],
-) -> (Vec<i32>, Vec<i32>, bool, bool) {
+) -> (Vec<i32>, Vec<i32>, bool, bool, Option<u64>) {
     macro_rules! bug {
         ($first:expr) => {
             panic!(
@@ -35,6 +34,13 @@ pub fn analyze(
     // - ed2d 8b02       vpush   {d8}
     // - f5ad 7d02       sub.w   sp, sp, #520    ; 0x208
     let mut modifies_sp = false;
+
+    // we'll try to compute the stack usage. We are mainly interested in `global_asm!` and
+    // `#[naked]` functions that only contain a single `asm!` block that only as trampolines. For
+    // that reason we'll give up the analysis if we encounter conditionals or loops, i.e.
+    // intra-branching, within the function. Analyzing those functions would be more work and won't
+    // help with our main goal of analyzing trampolines.
+    let mut stack = Some(0);
 
     // we want to avoid writing a full blown decoder since we are only interested in a single type
     // of instruction. We know that instructions can be 16-bit or 32-bit so we'll only decode 16-bit
@@ -137,6 +143,11 @@ pub fn analyze(
             // (it's unclear to me why this needs to be `4` instead of `2` but that's what works)
             imm32 += 2 * i + 4;
 
+            if imm32 >= 0 && (imm32 as usize) < bytes.len() {
+                // this is an `if` or `loop`; give up the stack usage analysis
+                stack = None;
+            }
+
             bs.push(imm32);
         } else if matches(first, "0b11100_xxxxxxxxxxx") {
             // A7.7.12  B - T2
@@ -147,6 +158,11 @@ pub fn analyze(
             // accordingly
             // (it's unclear to me why this needs to be `4` instead of `2` but that's what works)
             imm32 += 2 * i + 4;
+
+            if imm32 >= 0 && (imm32 as usize) < bytes.len() {
+                // this is an `if` or `loop`; give up the stack usage analysis
+                stack = None;
+            }
 
             bs.push(imm32);
         } else if matches(first, "0b010000_1110_xxx_xxx") {
@@ -264,6 +280,14 @@ pub fn analyze(
             // A7.7.99  PUSH - T1
             // e.g. 'b580            push    {r7, lr}'
             modifies_sp = true;
+
+            let m = first[1] & 1;
+            let register_list = first[0];
+            let register = (u16::from(m) << 14) | u16::from(register_list);
+            if let Some(stack) = stack.as_mut() {
+                *stack += 4 * u64::from(register.count_ones());
+            }
+
             continue;
         } else if matches(first, "0b1011_1010_00_xxx_xxx") {
             // A7.7.111  REV - T1
@@ -323,6 +347,14 @@ pub fn analyze(
             // A7.7.173      SUB (SP minus immediate) - T1
             // e.g. 'b081            sub     sp, #4'
             modifies_sp = true;
+
+            let imm7 = first[0] & 0b0111_1111;
+            let imm32 = u32::from(imm7) << 2;
+
+            if let Some(stack) = stack.as_mut() {
+                *stack += u64::from(imm32);
+            }
+
             continue;
         } else if matches(first, "0b1011_0010_01_xxx_xxx") {
             // A7.7.179      SXTB - T1
@@ -362,6 +394,15 @@ pub fn analyze(
                 let rn = first[0] & 0b1111;
                 if rn == SP {
                     modifies_sp = true;
+
+                    let register_list =
+                        ((u16::from(second[1]) & 0b0001_1111) << 8) | u16::from(second[0]);
+                    let m = (second[1] >> 6) & 1;
+                    let registers = (u16::from(m) << 14) | register_list;
+
+                    if let Some(stack) = stack.as_mut() {
+                        *stack += 4 * u64::from(registers.count_ones());
+                    }
                 }
             } else if v7
                 && matches(first, "0b11110_x_0_1101_x_1101")
@@ -371,6 +412,17 @@ pub fn analyze(
                 let rd = second[1] & 0b1111;
                 if rd == SP {
                     modifies_sp = true;
+
+                    let imm8 = second[0];
+                    let imm3 = (second[1] >> 4) & 0b0111;
+                    let i = (first[1] >> 2) & 1;
+                    let imm32 = thumb_expand_imm(
+                        (u16::from(i) << 11) | (u16::from(imm3) << 8) | u16::from(imm8),
+                    );
+
+                    if let Some(stack) = stack.as_mut() {
+                        *stack += u64::from(imm32);
+                    }
                 }
             } else if v7
                 && matches(first, "0b1110_110_1_0_x_1_0_1101")
@@ -378,12 +430,26 @@ pub fn analyze(
             {
                 // A7.7.249      VPUSH - T1
                 modifies_sp = true;
+
+                let imm8 = second[0] & 0b1111_1111;
+                let imm32 = u32::from(imm8) << 2;
+
+                if let Some(stack) = stack.as_mut() {
+                    *stack += u64::from(imm32);
+                }
             } else if v7
                 && matches(first, "0b1110_110_1_0_x_1_0_1101")
                 && matches(second, "0bxxxx_1010_xxxxxxxx")
             {
                 // A7.7.249      VPUSH - T2
                 modifies_sp = true;
+
+                let imm8 = second[0] & 0b1111_1111;
+                let imm32 = u32::from(imm8) << 2;
+
+                if let Some(stack) = stack.as_mut() {
+                    *stack += u64::from(imm32);
+                }
             } else if v7
                 && matches(first, "0b11110_x_xxxxxxxxxx")
                 && matches(second, "0b10_x_0_x_xxxxxxxxxxx")
@@ -413,6 +479,11 @@ pub fn analyze(
                 // accordingly
                 imm32 += 2 * i + 4;
 
+                if imm32 >= 0 && (imm32 as usize) < bytes.len() {
+                    // this is an `if` or `loop`; give up the stack usage analysis
+                    stack = None;
+                }
+
                 bs.push(imm32);
             } else if v7
                 && matches(first, "0b11110_x_xxxxxxxxxx")
@@ -440,6 +511,11 @@ pub fn analyze(
                 // offset is computed from the address of the *next* instruction; adjust
                 // accordingly
                 imm32 += 2 * i + 4;
+
+                if imm32 >= 0 && (imm32 as usize) < bytes.len() {
+                    // this is an `if` or `loop`; give up the stack usage analysis
+                    stack = None;
+                }
 
                 bs.push(imm32);
             } else if matches(first, "0b11110_x_xxxxxxxxxx")
@@ -475,7 +551,7 @@ pub fn analyze(
         }
     }
 
-    (bls, bs, indirect, modifies_sp)
+    (bls, bs, indirect, modifies_sp, stack)
 }
 
 fn matches(bytes: &[u8], pattern: &str) -> bool {
@@ -500,6 +576,31 @@ fn matches(bytes: &[u8], pattern: &str) -> bool {
 fn sign_extend(x: i32, nbits: u32) -> i32 {
     let shift = 32 - nbits;
     x.wrapping_shl(shift).wrapping_shr(shift)
+}
+
+fn thumb_expand_imm(imm12: u16) -> u32 {
+    if imm12 >> 10 == 0b00 {
+        match (imm12 >> 8) & 0b0011 {
+            0b00 => u32::from(imm12 & 0b0000_1111_1111),
+
+            0b01 => u32::from(imm12 & 0b0000_1111_1111) << 8,
+
+            0b10 => {
+                let imm8 = u32::from(imm12 & 0b0000_1111_1111);
+                (imm8 << 24) | (imm8 << 8)
+            }
+
+            0b11 => {
+                let imm8 = u32::from(imm12 & 0b0000_1111_1111);
+                (imm8 << 24) | (imm8 << 16) | (imm8 << 8) | imm8
+            }
+
+            _ => unreachable!(),
+        }
+    } else {
+        let imm8 = (1 << 7) | u32::from(imm12) & 0b0111_1111;
+        imm8.rotate_right(u32::from(imm12) >> 7)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -533,28 +634,40 @@ mod tests {
         // UDF
         assert_eq!(
             super::analyze(&[0xfe, 0xde], 0, true, &[]),
-            (vec![], vec![], false, false)
+            (vec![], vec![], false, false, Some(0))
         );
     }
 
     #[test]
     fn modifies_sp() {
         // bf00            nop
-        assert!(!super::analyze(&[0x00, 0xbf], 0, false, &[]).3);
+        let nop = super::analyze(&[0x00, 0xbf], 0, false, &[]);
+        assert!(!nop.3);
+        assert_eq!(nop.4, Some(0));
 
         // b081            sub     sp, #4
-        assert!(super::analyze(&[0x81, 0xb0], 0, false, &[]).3);
+        let sub = super::analyze(&[0x81, 0xb0], 0, false, &[]);
+        assert!(sub.3);
+        assert_eq!(sub.4, Some(4));
 
         // b580            push    {r7, lr}
-        assert!(super::analyze(&[0x80, 0xb5], 0, false, &[]).3);
+        let push = super::analyze(&[0x80, 0xb5], 0, false, &[]);
+        assert!(push.3);
+        assert_eq!(push.4, Some(8));
 
         // e92d 41f0       stmdb   sp!, {r4, r5, r6, r7, r8, lr}
-        assert!(super::analyze(&[0x2d, 0xe9, 0xf0, 0x41], 0, true, &[]).3);
+        let stmdb = super::analyze(&[0x2d, 0xe9, 0xf0, 0x41], 0, true, &[]);
+        assert!(stmdb.3);
+        assert_eq!(stmdb.4, Some(24));
 
         // ed2d 8b02       vpush   {d8}
-        assert!(super::analyze(&[0x2d, 0xed, 0x02, 0x8b], 0, true, &[]).3);
+        let vpush = super::analyze(&[0x2d, 0xed, 0x02, 0x8b], 0, true, &[]);
+        assert!(vpush.3);
+        assert_eq!(vpush.4, Some(8));
 
         // f5ad 7d02       sub.w   sp, sp, #520    ; 0x208
-        assert!(super::analyze(&[0xad, 0xf5, 0x02, 0x7d], 0, true, &[]).3);
+        let subw = super::analyze(&[0xad, 0xf5, 0x02, 0x7d], 0, true, &[]);
+        assert!(subw.3);
+        assert_eq!(subw.4, Some(520));
     }
 }
