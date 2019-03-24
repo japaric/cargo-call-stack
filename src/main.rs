@@ -432,7 +432,7 @@ fn run() -> Result<i32, failure::Error> {
 
         let mut stack = stack_sizes.get(canonical_name).cloned();
         if stack.is_none() {
-            // here we inject some target specific information we get from analyzing
+            // here we inject some target specific information we got from analyzing
             // `libcompiler_builtins.rlib`
 
             let ad_hoc = match target {
@@ -669,6 +669,25 @@ fn run() -> Result<i32, failure::Error> {
                         output: Some(Box::new(Type::Float)),
                     };
                     indirects.entry(sig).or_default().callees.insert(idx);
+                }
+
+                "__divmoddi4" | "__udivmoddi4" => {
+                    // `fn({i,u}64, {i,u}64, *{i,u}64) -> {i,u}64`
+                    let sig = FnSig {
+                        inputs: vec![
+                            Type::Integer(64),
+                            Type::Integer(64),
+                            Type::Pointer(Box::new(Type::Integer(64))),
+                        ],
+                        output: Some(Box::new(Type::Integer(64))),
+                    };
+                    indirects.entry(sig).or_default().callees.insert(idx);
+                }
+
+                "__aeabi_uldivmod" | "__aeabi_ldivmod" => {
+                    // these subroutines don't use a standard calling convention and are impossible
+                    // to call from Rust code (they can be called via `asm!` though). This case is
+                    // listed here to suppress the warning below
                 }
 
                 _ => {
