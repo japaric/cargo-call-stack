@@ -5,12 +5,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
-### Changed
-
-- The tool now estimates the stack usage of symbols in binary blobs (which come
-from C code and assembly files). Right now it can only identify zero stack usage.
-
-## [v0.1.3] - 2019-03-22
+## [v0.1.3] - 2019-03-24
 
 ### Changed
 
@@ -121,6 +116,7 @@ from C code and assembly files). Right now it can only identify zero stack usage
 
 Initial release
 
-[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.3...HEAD
+[v0.1.3]: https://github.com/japaric/cargo-call-stack/compare/v0.1.2...v0.1.3
 [v0.1.2]: https://github.com/japaric/cargo-call-stack/compare/v0.1.1...v0.1.2
 [v0.1.1]: https://github.com/japaric/cargo-call-stack/compare/v0.1.0...v0.1.1
