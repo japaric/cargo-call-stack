@@ -58,7 +58,7 @@ options (e.g. `--features`).
 [`cortex-m-rt`]: https://crates.io/crates/cortex-m-rt
 
 ``` console
-$ cargo +nightly call-stack --example app > cg.dot
+$ cargo +nightly call-stack --example app 2> cg.dot
 warning: assuming that asm!("") does *not* use the stack
 warning: assuming that asm!("") does *not* use the stack
 ```
