@@ -132,7 +132,7 @@ named!(indirect_call<CompleteStr, Stmt>, do_parse!(
         alt!(tag!("call") | tag!("invoke")) >> space >>
         many0!(do_parse!(call!(super::attribute) >> space >> (()))) >>
         output: alt!(map!(call!(super::type_), Some) | map!(tag!("void"), |_| None)) >> space >>
-        char!('%') >> digit >>
+        char!('%') >> alt!(map!(digit, drop) | map!(call!(super::ident), drop)) >>
         inputs: delimited!(
             char!('('),
             separated_list!(
@@ -560,6 +560,42 @@ start:
                      },
                      meta: vec![Metadata { kind: "dbg", id: 447 }],
                  },
+            ))
+        );
+
+        assert_eq!(
+            super::parse(S(r#"define void @main() unnamed_addr #2 !dbg !107 {
+  %2 = tail call i32 %spec.select() #8, !dbg !138, !callees !139
+}"#)),
+            Ok((
+                S(""),
+                Define {
+                    name: "main",
+                    stmts: vec![Stmt::IndirectCall(
+                        FnSig {
+                            inputs: vec![],
+                            output: Some(Box::new(Type::Integer(32)))
+                        },
+                        vec![
+                            Metadata {
+                                kind: "dbg",
+                                id: 138
+                            },
+                            Metadata {
+                                kind: "callees",
+                                id: 139
+                            }
+                        ]
+                    )],
+                    sig: FnSig {
+                        inputs: vec![],
+                        output: None,
+                    },
+                    meta: vec![Metadata {
+                        kind: "dbg",
+                        id: 107
+                    }],
+                }
             ))
         );
     }
