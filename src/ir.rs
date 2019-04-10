@@ -197,13 +197,27 @@ named!(string<CompleteStr, String>, do_parse!(
 );
 
 // e.g. `personality i32 (i32, i32, i64, %"unwind::libunwind::_Unwind_Exception"*, %"unwind::libunwind::_Unwind_Context"*)* @rust_eh_personality`
+// `personality i32 (...)* bitcast (i32 (i32, i32, i64, %"unwind::libunwind::_Unwind_Exception"*, %"unwind::libunwind::_Unwind_Context"*)* @rust_eh_personality to i32 (...)*)`
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Personality;
 
 named!(personality<CompleteStr, Personality>, do_parse!(
     tag!("personality") >> space >>
         type_ >> space >>
-        char!('@') >> ident >>
+        alt!(
+            do_parse!(char!('@') >> ident >> (())) |
+            do_parse!(
+                tag!("(...)*") >> space >>
+                    tag!("bitcast") >> space >>
+                    char!('(') >> space0 >>
+                    type_ >> space >>
+                    char!('@') >> ident >> space >>
+                    tag!("to") >> space >>
+                    type_ >> space >>
+                    tag!("(...)*") >> space0 >>
+                    char!(')') >>
+                    (()))
+        ) >>
         (Personality)
 ));
 
@@ -359,6 +373,13 @@ mod tests {
         assert_eq!(
             super::personality(S(
                 r#"personality i32 (i32, i32, i64, %"unwind::libunwind::_Unwind_Exception"*, %"unwind::libunwind::_Unwind_Context"*)* @rust_eh_personality"#
+            )),
+            Ok((S(""), Personality)),
+        );
+
+        assert_eq!(
+            super::personality(S(
+                r#"personality i32 (...)* bitcast (i32 (i32, i32, i64, %"unwind::libunwind::_Unwind_Exception"*, %"unwind::libunwind::_Unwind_Context"*)* @rust_eh_personality to i32 (...)*)"#
             )),
             Ok((S(""), Personality)),
         );
