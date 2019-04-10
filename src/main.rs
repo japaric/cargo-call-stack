@@ -1059,6 +1059,7 @@ fn run() -> Result<i32, failure::Error> {
                         | func.starts_with("llvm.ctlz.")
                         | func.starts_with("llvm.uadd.with.overflow.")
                         | func.starts_with("llvm.umul.with.overflow.")
+                        | func.starts_with("llvm.usub.with.overflow.")
                     {
                         if !llvm_seen.contains(func) {
                             llvm_seen.insert(func);
