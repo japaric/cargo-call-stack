@@ -1,4 +1,4 @@
-// #![deny(warnings)]
+#![deny(warnings)]
 
 use core::{
     cmp,
@@ -20,6 +20,7 @@ use ar::Archive;
 use cargo_project::{Artifact, Profile, Project};
 use clap::{crate_authors, crate_version, App, Arg};
 use env_logger::{Builder, Env};
+use failure::{bail, format_err};
 use filetime::FileTime;
 use log::{error, warn};
 use petgraph::{
@@ -32,12 +33,51 @@ use walkdir::WalkDir;
 use xmas_elf::{sections::SectionData, symbol_table::Entry, ElfFile};
 
 use crate::{
-    ir::{FnSig, Item, Stmt, Type},
+    ir::{FnSig, Item, ItemMetadata, MetadataKind, Stmt, Type},
     thumb::Tag,
 };
 
 mod ir;
 mod thumb;
+
+// prevent myself from using some data structures when `-Z call-metadata` is present / absent
+struct Maybe<T> {
+    inner: T,
+    panic_on_deref: bool,
+}
+
+impl<T> Maybe<T> {
+    fn new(inner: T, panic_on_deref: bool) -> Self {
+        Maybe {
+            inner,
+            panic_on_deref,
+        }
+    }
+
+    fn into_iter(self) -> T {
+        assert!(!self.panic_on_deref, "BUG: `panic_on_deref` is `true`");
+
+        self.inner
+    }
+}
+
+impl<T> ops::Deref for Maybe<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        assert!(!self.panic_on_deref, "BUG: `panic_on_deref` is `true`");
+
+        &self.inner
+    }
+}
+
+impl<T> ops::DerefMut for Maybe<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        assert!(!self.panic_on_deref, "BUG: `panic_on_deref` is `true`");
+
+        &mut self.inner
+    }
+}
 
 fn main() -> Result<(), failure::Error> {
     match run() {
@@ -54,6 +94,56 @@ const FONT: &str = "monospace";
 
 // Version we analyzed to extract some ad-hoc information
 const VERS: &str = "1.33.0"; // compiler-builtins = "0.1.4"
+
+// check if the `-Z call-metadata` flag is supported by the current `rustc` version
+fn probe_call_metadata() -> Result<bool, failure::Error> {
+    let output = Command::new("rustc").args(&["-Z", "help"]).output()?;
+
+    for line in str::from_utf8(&output.stdout)?.lines() {
+        if line.contains("call-metadata") {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn is_tag(name: &str) -> bool {
+    name == "$a" || name == "$t" || name == "$d" || {
+        (name.starts_with("$a.") || name.starts_with("$d.") || name.starts_with("$t."))
+            && name.splitn(2, '.').nth(1).unwrap().parse::<u64>().is_ok()
+    }
+}
+
+// `i1 (_*, %"core::fmt::Formatter"*)`
+fn sig_is_any_formatter_result(sig: &FnSig) -> bool {
+    match (&sig.inputs[..], sig.output.as_ref()) {
+        ([Type::Pointer(..), Type::Pointer(formatter)], Some(output))
+            if **formatter == Type::Alias("core::fmt::Formatter")
+                && **output == Type::Integer(1) =>
+        {
+            true
+        }
+
+        _ => false,
+    }
+}
+
+fn sig_is_void_formatter_result(sig: &FnSig) -> bool {
+    match (&sig.inputs[..], sig.output.as_ref()) {
+        ([Type::Pointer(void), Type::Pointer(formatter)], Some(output))
+            if **formatter == Type::Alias("core::fmt::Formatter")
+                && **output == Type::Integer(1) =>
+        {
+            match **void {
+                Type::Alias(void) => void.contains("fmt::Void"),
+                _ => false,
+            }
+        }
+
+        _ => false,
+    }
+}
 
 fn run() -> Result<i32, failure::Error> {
     Builder::from_env(Env::default().default_filter_or("warn")).init();
@@ -165,6 +255,11 @@ fn run() -> Result<i32, failure::Error> {
         "emit-stack-sizes",
     ]);
 
+    let has_call_metadata = probe_call_metadata()?;
+    if has_call_metadata {
+        cargo.args(&["-Z", "call-metadata"]);
+    }
+
     let cwd = env::current_dir()?;
     let project = Project::query(cwd)?;
 
@@ -255,6 +350,8 @@ fn run() -> Result<i32, failure::Error> {
     let items = crate::ir::parse(&ll)?;
     let mut defines = HashMap::new();
     let mut declares = HashMap::new();
+    // what does e.g. `!rust !0` mean
+    let mut meta_defs = Maybe::new(BTreeMap::new(), !has_call_metadata);
     for item in items {
         match item {
             Item::Define(def) => {
@@ -265,7 +362,64 @@ fn run() -> Result<i32, failure::Error> {
                 declares.insert(decl.name, decl);
             }
 
+            Item::Metadata(ItemMetadata::Unnamed { id, kind }) => {
+                if has_call_metadata {
+                    match kind {
+                        MetadataKind::Set(set) => {
+                            if !set.is_empty() {
+                                meta_defs.insert(id, MetadataKind::Set(set));
+                            }
+                        }
+
+                        _ => {
+                            meta_defs.insert(id, kind);
+                        }
+                    }
+                }
+            }
+
             _ => {}
+        }
+    }
+
+    // functions that could be called by `ArgumentV1.formatter`
+    let mut formatter_callees_ = Maybe::new(HashSet::new(), !has_call_metadata);
+    // functions that belong to the meta group `!rust !0`
+    let mut meta_groups = Maybe::new(BTreeMap::<_, Vec<_>>::new(), !has_call_metadata);
+    // now we do a pass over the `define`s to sort them in meta groups
+    if has_call_metadata {
+        for (name, def) in &defines {
+            let looks_like_formatter_callee = sig_is_any_formatter_result(&def.sig);
+
+            for meta in &def.meta {
+                if meta.kind == "rust" {
+                    let id = meta.id;
+
+                    let meta_kind = meta_defs.get(&id).unwrap_or_else(|| {
+                        panic!("BUG: metadata `!{}` doesn't appear to be call metadata", id)
+                    });
+
+                    match meta_kind {
+                        MetadataKind::Set(set) => {
+                            for id in set {
+                                meta_groups.entry(*id).or_default().push(name);
+                            }
+                        }
+
+                        MetadataKind::Fn { .. } => {
+                            if looks_like_formatter_callee {
+                                formatter_callees_.insert(name);
+                            }
+
+                            meta_groups.entry(id).or_default().push(name);
+                        }
+
+                        _ => {
+                            meta_groups.entry(id).or_default().push(name);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -285,6 +439,57 @@ fn run() -> Result<i32, failure::Error> {
         .into_iter()
         .map(|(name, stack)| (name.to_owned(), stack))
         .collect();
+
+    // extract list of "live" symbols (symbols that have not been GC-ed by the linker)
+    // this time we use the ELF and not the object file
+    let mut symbols = stack_sizes::analyze_executable(&elf)?;
+
+    // clear the thumb bit
+    if target_.is_thumb() {
+        symbols.defined = symbols
+            .defined
+            .into_iter()
+            .map(|(k, v)| (k & !1, v))
+            .collect();
+    }
+
+    // remove version strings from undefined symbols
+    symbols.undefined = symbols
+        .undefined
+        .into_iter()
+        .map(|sym| {
+            if let Some(name) = sym.rsplit("@@").nth(1) {
+                name
+            } else {
+                sym
+            }
+        })
+        .collect();
+
+    let mut has_non_rust_symbols = Maybe::new(
+        if symbols.undefined.is_empty() {
+            false // don't know, actually
+        } else {
+            true
+        },
+        !has_call_metadata,
+    );
+
+    // we use this set to detect if there are symbols in the final binary that don't come from Rust
+    // code. We start by populating it with all the symbols in the executable
+    let mut non_rust_symbols = Maybe::new(
+        if has_call_metadata && symbols.undefined.is_empty() {
+            symbols
+                .defined
+                .values()
+                .flat_map(|f| f.names())
+                .cloned()
+                .collect()
+        } else {
+            HashSet::new()
+        },
+        !has_call_metadata,
+    );
 
     // extract stack usage info from `libcompiler-builtins.rlib`
     let sysroot_nl = String::from_utf8(
@@ -321,49 +526,76 @@ fn run() -> Result<i32, failure::Error> {
                 {
                     buf.clear();
                     entry.read_to_end(&mut buf)?;
+
                     stack_sizes.extend(
                         stack_sizes::analyze_object(&buf)?
                             .into_iter()
                             .map(|(name, stack)| (name.to_owned(), stack)),
                     );
+
+                    if has_call_metadata && !*has_non_rust_symbols {
+                        // all symbols defined in compiler-builtins come from Rust code
+                        let elf = &ElfFile::new(&buf).map_err(failure::err_msg)?;
+
+                        fn sub<E>(
+                            all_symbols: &mut HashSet<&str>,
+                            entries: &[E],
+                            elf: &ElfFile,
+                        ) -> Result<(), failure::Error>
+                        where
+                            E: Entry,
+                        {
+                            use xmas_elf::symbol_table::Type;
+
+                            for entry in entries {
+                                let name = entry.get_name(elf);
+                                let ty = entry.get_type();
+
+                                if ty == Ok(Type::Func)
+                                    || (ty == Ok(Type::NoType)
+                                        && name
+                                            .map(|name| !name.is_empty() && !is_tag(name))
+                                            .unwrap_or(false))
+                                {
+                                    let name = name.map_err(failure::err_msg)?;
+
+                                    all_symbols.remove(name);
+                                }
+                            }
+
+                            Ok(())
+                        }
+
+                        match elf
+                            .find_section_by_name(".symtab")
+                            .ok_or_else(|| failure::err_msg("`.symtab` section not found"))?
+                            .get_data(elf)
+                        {
+                            Ok(SectionData::SymbolTable32(entries)) => {
+                                sub(&mut *non_rust_symbols, entries, elf)?
+                            }
+
+                            Ok(SectionData::SymbolTable64(entries)) => {
+                                sub(&mut *non_rust_symbols, entries, elf)?
+                            }
+
+                            _ => bail!("malformed .symtab section"),
+                        }
+                    }
                 }
             }
         }
     }
 
-    // extract list of "live" symbols (symbols that have not been GC-ed by the linker)
-    // this time we use the ELF and not the object file
-    let mut symbols = stack_sizes::analyze_executable(&elf)?;
-
-    // clear the thumb bit
-    if target_.is_thumb() {
-        symbols.defined = symbols
-            .defined
-            .into_iter()
-            .map(|(k, v)| (k & !1, v))
-            .collect();
-    }
-
-    // remove version strings from undefined symbols
-    symbols.undefined = symbols
-        .undefined
-        .into_iter()
-        .map(|sym| {
-            if let Some(name) = sym.rsplit("@@").nth(1) {
-                name
-            } else {
-                sym
-            }
-        })
-        .collect();
-
     let mut g = DiGraph::<Node, ()>::new();
     let mut indices = BTreeMap::<Cow<str>, _>::new();
 
-    let mut indirects: HashMap<FnSig, Indirect> = HashMap::new();
-    let mut dynamics: HashMap<FnSig, Dynamic> = HashMap::new();
+    let mut indirects = Maybe::new(HashMap::<_, Indirect>::new(), has_call_metadata);
+    let mut dynamics = Maybe::new(HashMap::<_, Dynamic>::new(), has_call_metadata);
+    let mut meta_callers = Maybe::new(HashMap::<_, HashSet<_>>::new(), !has_call_metadata);
     // functions that could be called by `ArgumentV1.formatter`
-    let mut fmts = HashSet::new();
+    let mut formatter_callees = Maybe::new(HashSet::new(), has_call_metadata);
+    let mut formatter_callers_ = Maybe::new(HashSet::new(), !has_call_metadata);
 
     // Some functions may be aliased; we map aliases to a single name. For example, if `foo`,
     // `bar` and `baz` all have the same address then this maps contains: `foo -> foo`, `bar -> foo`
@@ -373,21 +605,23 @@ fn run() -> Result<i32, failure::Error> {
     let mut ambiguous = HashMap::<String, u32>::new();
 
     // we do a first pass over all the definitions to collect methods in `impl Trait for Type`
-    let mut default_methods = HashSet::new();
-    for name in defines.keys() {
-        let demangled = rustc_demangle::demangle(name).to_string();
+    let mut default_methods = Maybe::new(HashSet::new(), has_call_metadata);
+    if !has_call_metadata {
+        for name in defines.keys() {
+            let demangled = rustc_demangle::demangle(name).to_string();
 
-        // `<crate::module::Type as crate::module::Trait>::method::hdeadbeef`
-        if demangled.starts_with("<") {
-            if let Some(rhs) = demangled.splitn(2, " as ").nth(1) {
-                // rhs = `crate::module::Trait>::method::hdeadbeef`
-                let mut parts = rhs.splitn(2, ">::");
+            // `<crate::module::Type as crate::module::Trait>::method::hdeadbeef`
+            if demangled.starts_with("<") {
+                if let Some(rhs) = demangled.splitn(2, " as ").nth(1) {
+                    // rhs = `crate::module::Trait>::method::hdeadbeef`
+                    let mut parts = rhs.splitn(2, ">::");
 
-                if let (Some(trait_), Some(rhs)) = (parts.next(), parts.next()) {
-                    // trait_ = `crate::module::Trait`, rhs = `method::hdeadbeef`
+                    if let (Some(trait_), Some(rhs)) = (parts.next(), parts.next()) {
+                        // trait_ = `crate::module::Trait`, rhs = `method::hdeadbeef`
 
-                    if let Some(method) = dehash(rhs) {
-                        default_methods.insert(format!("{}::{}", trait_, method));
+                        if let Some(method) = dehash(rhs) {
+                            default_methods.insert(format!("{}::{}", trait_, method));
+                        }
                     }
                 }
             }
@@ -396,7 +630,7 @@ fn run() -> Result<i32, failure::Error> {
 
     // add all real nodes
     let mut has_stack_usage_info = false;
-    let mut has_untyped_symbols = false;
+    let mut has_untyped_symbols = Maybe::new(false, has_call_metadata);
     let mut addr2name = BTreeMap::new();
     for (address, sym) in &symbols.defined {
         let names = sym.names();
@@ -409,13 +643,7 @@ fn run() -> Result<i32, failure::Error> {
                 // otherwise, pick the first name that's not a tag
                 names
                     .iter()
-                    .filter_map(|&name| {
-                        if name == "$a" || name.starts_with("$a.") {
-                            None
-                        } else {
-                            Some(name)
-                        }
-                    })
+                    .filter_map(|&name| if is_tag(name) { None } else { Some(name) })
                     .next()
                     .expect("UNREACHABLE")
             }
@@ -425,6 +653,11 @@ fn run() -> Result<i32, failure::Error> {
 
         for name in names {
             aliases.insert(name, canonical_name);
+
+            // let's remove aliases from `non_rust_symbols`
+            if has_call_metadata && *name != canonical_name {
+                non_rust_symbols.remove(name);
+            }
         }
 
         let _out = addr2name.insert(address, canonical_name);
@@ -537,162 +770,155 @@ fn run() -> Result<i32, failure::Error> {
         let idx = g.add_node(Node(canonical_name, stack, false));
         indices.insert(canonical_name.into(), idx);
 
-        // trait methods look like `<crate::module::Type as crate::module::Trait>::method::h$hash`
-        // default trait methods look like `crate::module::Trait::method::h$hash`
-        let is_trait_method = demangled.starts_with("<") && demangled.contains(" as ") || {
-            dehash(&demangled)
-                .map(|path| default_methods.contains(path))
-                .unwrap_or(false)
-        };
-
-        if let Some(def) = names.iter().filter_map(|name| defines.get(name)).next() {
-            // if the signature is `fn(&_, &mut fmt::Formatter) -> fmt::Result`
-            match (&def.sig.inputs[..], def.sig.output.as_ref()) {
-                ([Type::Pointer(..), Type::Pointer(fmt)], Some(output))
-                    if **fmt == Type::Alias("core::fmt::Formatter")
-                        && **output == Type::Integer(1) =>
-                {
-                    fmts.insert(idx);
+        if !has_call_metadata {
+            if let Some(def) = names.iter().filter_map(|name| defines.get(name)).next() {
+                if sig_is_any_formatter_result(&def.sig) {
+                    formatter_callees.insert(idx);
                 }
 
-                _ => {}
-            }
+                // trait methods look like `<crate::module::Type as crate::module::Trait>::method::h$hash`
+                // default trait methods look like `crate::module::Trait::method::h$hash`
+                let is_trait_method = demangled.starts_with("<") && demangled.contains(" as ") || {
+                    dehash(&demangled)
+                        .map(|path| default_methods.contains(path))
+                        .unwrap_or(false)
+                };
 
-            let is_object_safe = is_trait_method && {
-                match def.sig.inputs.first().as_ref() {
-                    Some(Type::Pointer(ty)) => match **ty {
-                        // XXX can the receiver be a *specific* function? (e.g. `fn() {foo}`)
-                        Type::Fn(_) => false,
+                let is_object_safe = is_trait_method && {
+                    match def.sig.inputs.first().as_ref() {
+                        Some(Type::Pointer(ty)) => match **ty {
+                            // XXX can the receiver be a *specific* function? (e.g. `fn() {foo}`)
+                            Type::Fn(_) => false,
 
-                        _ => true,
-                    },
-                    _ => false,
+                            _ => true,
+                        },
+                        _ => false,
+                    }
+                };
+
+                if is_object_safe {
+                    let mut sig = def.sig.clone();
+
+                    // erase the type of the reciver
+                    sig.inputs[0] = Type::erased();
+
+                    dynamics.entry(sig).or_default().callees.insert(idx);
+                } else {
+                    indirects
+                        .entry(def.sig.clone())
+                        .or_default()
+                        .callees
+                        .insert(idx);
                 }
-            };
-
-            if is_object_safe {
-                let mut sig = def.sig.clone();
-
-                // erase the type of the reciver
-                sig.inputs[0] = Type::erased();
-
-                dynamics.entry(sig).or_default().callees.insert(idx);
             } else {
-                indirects
-                    .entry(def.sig.clone())
-                    .or_default()
-                    .callees
-                    .insert(idx);
-            }
-        } else if let Some(sig) = names
-            .iter()
-            .filter_map(|name| declares.get(name).and_then(|decl| decl.sig.clone()))
-            .next()
-        {
-            // sanity check (?)
-            assert!(!is_trait_method, "BUG: undefined trait method");
-
-            indirects.entry(sig).or_default().callees.insert(idx);
-        } else {
-            // from `compiler-builtins`
-            match canonical_name {
-                "__aeabi_memcpy" | "__aeabi_memcpy4" | "__aeabi_memcpy8" => {
-                    // `fn(*mut u8, *const u8, usize)`
-                    let sig = FnSig {
-                        inputs: vec![
-                            Type::Pointer(Box::new(Type::Integer(8))),
-                            Type::Pointer(Box::new(Type::Integer(8))),
-                            Type::Integer(32), // ARM has 32-bit pointers
-                        ],
-                        output: None,
-                    };
+                if let Some(sig) = names
+                    .iter()
+                    .filter_map(|name| declares.get(name).and_then(|decl| decl.sig.clone()))
+                    .next()
+                {
                     indirects.entry(sig).or_default().callees.insert(idx);
-                }
+                } else {
+                    // from `compiler-builtins`
+                    match canonical_name {
+                        "__aeabi_memcpy" | "__aeabi_memcpy4" | "__aeabi_memcpy8" => {
+                            // `fn(*mut u8, *const u8, usize)`
+                            let sig = FnSig {
+                                inputs: vec![
+                                    Type::Pointer(Box::new(Type::Integer(8))),
+                                    Type::Pointer(Box::new(Type::Integer(8))),
+                                    Type::Integer(32), // ARM has 32-bit pointers
+                                ],
+                                output: None,
+                            };
+                            indirects.entry(sig).or_default().callees.insert(idx);
+                        }
 
-                "__aeabi_memclr" | "__aeabi_memclr4" | "__aeabi_memclr8" => {
-                    // `fn(*mut u8, usize)`
-                    let sig = FnSig {
-                        inputs: vec![
-                            Type::Pointer(Box::new(Type::Integer(8))),
-                            Type::Integer(32), // ARM has 32-bit pointers
-                        ],
-                        output: None,
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
+                        "__aeabi_memclr" | "__aeabi_memclr4" | "__aeabi_memclr8" => {
+                            // `fn(*mut u8, usize)`
+                            let sig = FnSig {
+                                inputs: vec![
+                                    Type::Pointer(Box::new(Type::Integer(8))),
+                                    Type::Integer(32), // ARM has 32-bit pointers
+                                ],
+                                output: None,
+                            };
+                            indirects.entry(sig).or_default().callees.insert(idx);
+                        }
 
-                "__aeabi_memset" | "__aeabi_memset4" | "__aeabi_memset8" => {
-                    // `fn(*mut u8, usize, i32)`
-                    let sig = FnSig {
-                        inputs: vec![
-                            Type::Pointer(Box::new(Type::Integer(8))),
-                            Type::Integer(32), // ARM has 32-bit pointers
-                            Type::Integer(32),
-                        ],
-                        output: None,
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
+                        "__aeabi_memset" | "__aeabi_memset4" | "__aeabi_memset8" => {
+                            // `fn(*mut u8, usize, i32)`
+                            let sig = FnSig {
+                                inputs: vec![
+                                    Type::Pointer(Box::new(Type::Integer(8))),
+                                    Type::Integer(32), // ARM has 32-bit pointers
+                                    Type::Integer(32),
+                                ],
+                                output: None,
+                            };
+                            indirects.entry(sig).or_default().callees.insert(idx);
+                        }
 
-                "__aeabi_fadd" | "__addsf3" | "__aeabi_fsub" | "__subsf3" | "__aeabi_fdiv"
-                | "__divsf3" | "__aeabi_fmul" | "__mulsf3" => {
-                    // `fn(f32, f32) -> f32`
-                    let sig = FnSig {
-                        inputs: vec![Type::Float, Type::Float],
-                        output: Some(Box::new(Type::Float)),
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
+                        "__aeabi_fadd" | "__addsf3" | "__aeabi_fsub" | "__subsf3"
+                        | "__aeabi_fdiv" | "__divsf3" | "__aeabi_fmul" | "__mulsf3" => {
+                            // `fn(f32, f32) -> f32`
+                            let sig = FnSig {
+                                inputs: vec![Type::Float, Type::Float],
+                                output: Some(Box::new(Type::Float)),
+                            };
+                            indirects.entry(sig).or_default().callees.insert(idx);
+                        }
 
-                "__aeabi_fcmpgt" | "__aeabi_fcmplt" => {
-                    // `fn(f32, f32) -> i32`
-                    let sig = FnSig {
-                        inputs: vec![Type::Float, Type::Float],
-                        output: Some(Box::new(Type::Integer(32))),
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
+                        "__aeabi_fcmpgt" | "__aeabi_fcmplt" => {
+                            // `fn(f32, f32) -> i32`
+                            let sig = FnSig {
+                                inputs: vec![Type::Float, Type::Float],
+                                output: Some(Box::new(Type::Integer(32))),
+                            };
+                            indirects.entry(sig).or_default().callees.insert(idx);
+                        }
 
-                "__aeabi_f2uiz" | "__aeabi_f2iz" => {
-                    // `fn(f32) -> {i,u}32`
-                    let sig = FnSig {
-                        inputs: vec![Type::Float],
-                        output: Some(Box::new(Type::Integer(32))),
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
+                        "__aeabi_f2uiz" | "__aeabi_f2iz" => {
+                            // `fn(f32) -> {i,u}32`
+                            let sig = FnSig {
+                                inputs: vec![Type::Float],
+                                output: Some(Box::new(Type::Integer(32))),
+                            };
+                            indirects.entry(sig).or_default().callees.insert(idx);
+                        }
 
-                "__aeabi_ui2f" | "__aeabi_i2f" => {
-                    // `fn({i,u}32) -> f32`
-                    let sig = FnSig {
-                        inputs: vec![Type::Integer(32)],
-                        output: Some(Box::new(Type::Float)),
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
+                        "__aeabi_ui2f" | "__aeabi_i2f" => {
+                            // `fn({i,u}32) -> f32`
+                            let sig = FnSig {
+                                inputs: vec![Type::Integer(32)],
+                                output: Some(Box::new(Type::Float)),
+                            };
+                            indirects.entry(sig).or_default().callees.insert(idx);
+                        }
 
-                "__divmoddi4" | "__udivmoddi4" => {
-                    // `fn({i,u}64, {i,u}64, *{i,u}64) -> {i,u}64`
-                    let sig = FnSig {
-                        inputs: vec![
-                            Type::Integer(64),
-                            Type::Integer(64),
-                            Type::Pointer(Box::new(Type::Integer(64))),
-                        ],
-                        output: Some(Box::new(Type::Integer(64))),
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
+                        "__divmoddi4" | "__udivmoddi4" => {
+                            // `fn({i,u}64, {i,u}64, *{i,u}64) -> {i,u}64`
+                            let sig = FnSig {
+                                inputs: vec![
+                                    Type::Integer(64),
+                                    Type::Integer(64),
+                                    Type::Pointer(Box::new(Type::Integer(64))),
+                                ],
+                                output: Some(Box::new(Type::Integer(64))),
+                            };
+                            indirects.entry(sig).or_default().callees.insert(idx);
+                        }
 
-                "__aeabi_uldivmod" | "__aeabi_ldivmod" => {
-                    // these subroutines don't use a standard calling convention and are impossible
-                    // to call from Rust code (they can be called via `asm!` though). This case is
-                    // listed here to suppress the warning below
-                }
+                        "__aeabi_uldivmod" | "__aeabi_ldivmod" => {
+                            // these subroutines don't use a standard calling convention and are
+                            // impossible to call from Rust code (they can be called via `asm!`
+                            // though). This case is listed here to suppress the warning below
+                        }
 
-                _ => {
-                    has_untyped_symbols = true;
-                    warn!("no type information for `{}`", canonical_name);
+                        _ => {
+                            *has_untyped_symbols = true;
+                            warn!("no type information for `{}`", canonical_name);
+                        }
+                    }
                 }
             }
         }
@@ -705,11 +931,11 @@ fn run() -> Result<i32, failure::Error> {
     let mut edges: HashMap<_, HashSet<_>> = HashMap::new(); // NodeIdx -> [NodeIdx]
     let mut defined = HashSet::new(); // functions that are `define`-d in the LLVM-IR
     for define in defines.values() {
-        let (caller, callees_seen) = if let Some(canonical_name) = aliases.get(&define.name) {
+        let (name, caller, callees_seen) = if let Some(canonical_name) = aliases.get(&define.name) {
             defined.insert(*canonical_name);
 
             let idx = indices[*canonical_name];
-            (idx, edges.entry(idx).or_default())
+            (canonical_name, idx, edges.entry(idx).or_default())
         } else {
             // this symbol was GC-ed by the linker, skip
             continue;
@@ -874,28 +1100,78 @@ fn run() -> Result<i32, failure::Error> {
                     }
                 }
 
-                Stmt::IndirectCall(sig) => {
-                    if sig
-                        .inputs
-                        .first()
-                        .map(|ty| ty.has_been_erased())
-                        .unwrap_or(false)
-                    {
-                        // dynamic dispatch
-                        let dynamic = dynamics.entry(sig.clone()).or_default();
+                Stmt::IndirectCall(sig, metadata) => {
+                    if has_call_metadata {
+                        let id = metadata
+                            .iter()
+                            .filter_map(|meta| {
+                                if meta.kind == "rust" {
+                                    Some(meta.id)
+                                } else {
+                                    None
+                                }
+                            })
+                            .next()
+                            .ok_or_else(|| {
+                                format_err!(
+                                    "indirect call in `{}` contains no `rust` metadata",
+                                    name
+                                )
+                            })?;
 
-                        dynamic.called = true;
-                        dynamic.callers.insert(caller);
+                        match meta_defs.get(&id) {
+                            None => bail!(
+                                "indirect call in `{}` contains undefined `rust` metadata",
+                                name
+                            ),
+
+                            Some(MetadataKind::Set(..)) => bail!(
+                                "indirect call in `{}` contains a `rust` metadata 'set'",
+                                name
+                            ),
+
+                            // special case: `fn(Void, Formatter) -> Result` is a pseudo trait object
+                            Some(MetadataKind::Fn { .. }) => {
+                                if sig_is_void_formatter_result(sig) {
+                                    formatter_callers_.insert(caller);
+                                    continue;
+                                }
+                            }
+
+                            _ => {}
+                        }
+
+                        meta_callers.entry(id).or_default().insert(caller);
                     } else {
-                        let indirect = indirects.entry(sig.clone()).or_default();
+                        if sig
+                            .inputs
+                            .first()
+                            .map(|ty| ty.has_been_erased())
+                            .unwrap_or(false)
+                        {
+                            // dynamic dispatch
+                            let dynamic = dynamics.entry(sig.clone()).or_default();
 
-                        indirect.called = true;
-                        indirect.callers.insert(caller);
+                            dynamic.called = true;
+                            dynamic.callers.insert(caller);
+                        } else {
+                            let indirect = indirects.entry(sig.clone()).or_default();
+
+                            indirect.called = true;
+                            indirect.callers.insert(caller);
+                        }
                     }
                 }
 
                 Stmt::Label | Stmt::Comment | Stmt::Other => {}
             }
+        }
+    }
+
+    // all symbols defined in the LLVM-IR come from Rust
+    if has_call_metadata {
+        for symbol in &defined {
+            non_rust_symbols.remove(symbol);
         }
     }
 
@@ -1073,136 +1349,240 @@ fn run() -> Result<i32, failure::Error> {
     }
 
     // add fictitious nodes for indirect function calls
-    if has_untyped_symbols {
-        warn!(
-            "the program contains untyped, external symbols (e.g. linked in from binary blobs); \
-             indirect function calls can not be bounded"
-        );
-    }
+    if has_call_metadata {
+        if !*has_non_rust_symbols && non_rust_symbols.is_empty() {
+            *has_non_rust_symbols = true;
 
-    // this is a bit weird but for some reason `ArgumentV1.formatter` sometimes lowers to different
-    // LLVM types. In theory it should always be: `i1 (*%fmt::Void, *&core::fmt::Formatter)*` but
-    // sometimes the type of the first argument is `%fmt::Void`, sometimes it's `%core::fmt::Void`,
-    // sometimes is `%core::fmt::Void.12` and on occasion it's even `%SomeRandomType`
-    //
-    // To cope with this weird fact the following piece of code will try to find the right LLVM
-    // type.
-    let all_maybe_void = indirects
-        .keys()
-        .filter_map(|sig| match (&sig.inputs[..], sig.output.as_ref()) {
-            ([Type::Pointer(receiver), Type::Pointer(formatter)], Some(output))
-                if **formatter == Type::Alias("core::fmt::Formatter")
-                    && **output == Type::Integer(1) =>
-            {
-                if let Type::Alias(receiver) = **receiver {
-                    Some(receiver)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    let one_true_void = if all_maybe_void.contains(&"fmt::Void") {
-        Some("fmt::Void")
-    } else {
-        all_maybe_void
-            .iter()
-            .filter_map(|maybe_void| {
-                // this could be `core::fmt::Void` or `core::fmt::Void.12`
-                if maybe_void.starts_with("core::fmt::Void") {
-                    Some(*maybe_void)
-                } else {
-                    None
-                }
-            })
-            .next()
-            .or_else(|| {
-                if all_maybe_void.len() == 1 {
-                    // we got a random type!
-                    Some(all_maybe_void[0])
-                } else {
-                    None
-                }
-            })
-    };
-
-    for (mut sig, indirect) in indirects {
-        if !indirect.called {
-            continue;
+            warn!(
+                "the program contains untyped, external symbols (e.g. linked in from binary blobs); \
+                 function pointer calls can not be bounded"
+            );
         }
 
-        let callees = if let Some(one_true_void) = one_true_void {
-            match (&sig.inputs[..], sig.output.as_ref()) {
-                // special case: this is `ArgumentV1.formatter` a pseudo trait object
-                ([Type::Pointer(void), Type::Pointer(fmt)], Some(output))
-                    if **void == Type::Alias(one_true_void)
-                        && **fmt == Type::Alias("core::fmt::Formatter")
+        if !formatter_callers_.is_empty() {
+            let name = "fn(&fmt::Void, &mut fmt::Formatter) -> fmt::Result";
+            let call = g.add_node(Node(name, Some(0), true));
+
+            for caller in formatter_callers_.into_iter() {
+                g.add_edge(caller, call, ());
+            }
+
+            if formatter_callees_.is_empty() {
+                error!("BUG? no callees for `{}`", name);
+            } else {
+                for callee in formatter_callees_.into_iter() {
+                    let callee = indices[*callee];
+                    g.add_edge(call, callee, ());
+                }
+            }
+        }
+
+        for (id, callers) in meta_callers.into_iter() {
+            match meta_defs[&id] {
+                MetadataKind::Fn { sig: name } => {
+                    let call = g.add_node(Node(name, Some(0), true));
+
+                    for caller in callers {
+                        g.add_edge(caller, call, ());
+                    }
+
+                    if let Some(callees) = meta_groups.get(&id) {
+                        for callee in callees {
+                            let callee = indices[**callee];
+                            g.add_edge(call, callee, ());
+                        }
+
+                        if *has_non_rust_symbols {
+                            let unknown = g.add_node(Node("?", None, false));
+                            g.add_edge(call, unknown, ());
+                        }
+                    } else {
+                        error!("BUG? no callees for `{}`", name);
+
+                        let unknown = g.add_node(Node("?", None, false));
+                        g.add_edge(call, unknown, ());
+                    }
+                }
+
+                MetadataKind::Dyn { trait_, method } => {
+                    let name = format!("(dyn {}).{}", trait_, method);
+
+                    let call = g.add_node(Node(name.clone(), Some(0), true));
+
+                    for caller in callers {
+                        g.add_edge(caller, call, ());
+                    }
+
+                    if let Some(callees) = meta_groups.get(&id) {
+                        for callee in callees {
+                            let callee = indices[**callee];
+                            g.add_edge(call, callee, ());
+                        }
+                    } else {
+                        error!("BUG? no callees for `{}`", name);
+
+                        let unknown = g.add_node(Node("?", None, false));
+                        g.add_edge(call, unknown, ());
+                    }
+                }
+
+                MetadataKind::Drop { trait_ } => {
+                    let name = format!("drop(dyn {})", trait_);
+
+                    let call = g.add_node(Node(name.clone(), Some(0), true));
+
+                    for caller in callers {
+                        g.add_edge(caller, call, ());
+                    }
+
+                    if let Some(callees) = meta_groups.get(&id) {
+                        for callee in callees {
+                            let callee = indices[**callee];
+                            g.add_edge(call, callee, ());
+                        }
+                    } else {
+                        error!("BUG? no callees for `{}`", name);
+
+                        let unknown = g.add_node(Node("?", None, false));
+                        g.add_edge(call, unknown, ());
+                    }
+                }
+
+                _ => unreachable!(),
+            }
+        }
+    } else {
+        if *has_untyped_symbols {
+            warn!(
+                "the program contains untyped, external symbols (e.g. linked in from binary blobs); \
+                 function pointer calls can not be bounded"
+            );
+        }
+
+        // this is a bit weird but for some reason `ArgumentV1.formatter` sometimes lowers to
+        // different LLVM types. In theory it should always be: `i1 (*%fmt::Void,
+        // *&core::fmt::Formatter)*` but sometimes the type of the first argument is `%fmt::Void`,
+        // sometimes it's `%core::fmt::Void`, sometimes is `%core::fmt::Void.12` and on occasion
+        // it's even `%SomeRandomType`
+        // To cope with this weird fact the following piece of code will try to find the right LLVM
+        // type.
+        let all_maybe_void = indirects
+            .keys()
+            .filter_map(|sig| match (&sig.inputs[..], sig.output.as_ref()) {
+                ([Type::Pointer(receiver), Type::Pointer(formatter)], Some(output))
+                    if **formatter == Type::Alias("core::fmt::Formatter")
                         && **output == Type::Integer(1) =>
                 {
-                    if fmts.is_empty() {
-                        error!("BUG? no callees for `{}`", sig.to_string());
+                    if let Type::Alias(receiver) = **receiver {
+                        Some(receiver)
+                    } else {
+                        None
                     }
-
-                    // canonicalize the signature
-                    if one_true_void != "fmt::Void" {
-                        sig.inputs[0] = Type::Alias("fmt::Void");
-                    }
-
-                    &fmts
                 }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
 
-                _ => &indirect.callees,
-            }
+        let one_true_void = if all_maybe_void.contains(&"fmt::Void") {
+            Some("fmt::Void")
         } else {
-            &indirect.callees
+            all_maybe_void
+                .iter()
+                .filter_map(|maybe_void| {
+                    // this could be `core::fmt::Void` or `core::fmt::Void.12`
+                    if maybe_void.starts_with("core::fmt::Void") {
+                        Some(*maybe_void)
+                    } else {
+                        None
+                    }
+                })
+                .next()
+                .or_else(|| {
+                    if all_maybe_void.len() == 1 {
+                        // we got a random type!
+                        Some(all_maybe_void[0])
+                    } else {
+                        None
+                    }
+                })
         };
 
-        let mut name = sig.to_string();
-        // append '*' to denote that this is a function pointer
-        name.push('*');
+        for (mut sig, indirect) in indirects.into_iter() {
+            if !indirect.called {
+                continue;
+            }
 
-        let call = g.add_node(Node(name.clone(), Some(0), true));
+            let callees = if let Some(one_true_void) = one_true_void {
+                match (&sig.inputs[..], sig.output.as_ref()) {
+                    // special case: this is `ArgumentV1.formatter` a pseudo trait object
+                    ([Type::Pointer(void), Type::Pointer(fmt)], Some(output))
+                        if **void == Type::Alias(one_true_void)
+                            && **fmt == Type::Alias("core::fmt::Formatter")
+                            && **output == Type::Integer(1) =>
+                    {
+                        if formatter_callees.is_empty() {
+                            error!("BUG? no callees for `{}`", sig.to_string());
+                        }
 
-        for caller in &indirect.callers {
-            g.add_edge(*caller, call, ());
-        }
+                        // canonicalize the signature
+                        if one_true_void != "fmt::Void" {
+                            sig.inputs[0] = Type::Alias("fmt::Void");
+                        }
 
-        if has_untyped_symbols {
-            // add an edge between this and a potential extern / untyped symbol
-            let extern_sym = g.add_node(Node("?", None, false));
-            g.add_edge(call, extern_sym, ());
-        } else {
-            if callees.is_empty() {
-                error!("BUG? no callees for `{}`", name);
+                        &formatter_callees
+                    }
+
+                    _ => &indirect.callees,
+                }
+            } else {
+                &indirect.callees
+            };
+
+            let mut name = sig.to_string();
+            // append '*' to denote that this is a function pointer
+            name.push('*');
+
+            let call = g.add_node(Node(name.clone(), Some(0), true));
+
+            for caller in &indirect.callers {
+                g.add_edge(*caller, call, ());
+            }
+
+            if *has_untyped_symbols {
+                // add an edge between this and a potential extern / untyped symbol
+                let extern_sym = g.add_node(Node("?", None, false));
+                g.add_edge(call, extern_sym, ());
+            } else {
+                if callees.is_empty() {
+                    error!("BUG? no callees for `{}`", name);
+                }
+            }
+
+            for callee in callees {
+                g.add_edge(call, *callee, ());
             }
         }
 
-        for callee in callees {
-            g.add_edge(call, *callee, ());
-        }
-    }
+        // add fictitious nodes for dynamic dispatch
+        for (sig, dynamic) in dynamics.into_iter() {
+            if !dynamic.called {
+                continue;
+            }
 
-    // add fictitious nodes for dynamic dispatch
-    for (sig, dynamic) in dynamics {
-        if !dynamic.called {
-            continue;
-        }
+            let name = sig.to_string();
 
-        let name = sig.to_string();
+            if dynamic.callees.is_empty() {
+                error!("BUG? no callees for `{}`", name);
+            }
 
-        if dynamic.callees.is_empty() {
-            error!("BUG? no callees for `{}`", name);
-        }
+            let call = g.add_node(Node(name, Some(0), true));
+            for caller in &dynamic.callers {
+                g.add_edge(*caller, call, ());
+            }
 
-        let call = g.add_node(Node(name, Some(0), true));
-        for caller in &dynamic.callers {
-            g.add_edge(*caller, call, ());
-        }
-
-        for callee in &dynamic.callees {
-            g.add_edge(call, *callee, ());
+            for callee in &dynamic.callees {
+                g.add_edge(call, *callee, ());
+            }
         }
     }
 

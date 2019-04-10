@@ -9,7 +9,7 @@ mod ty;
 
 pub use crate::ir::{
     define::{Define, Stmt},
-    item::{Declare, Item},
+    item::{Declare, Item, Metadata as ItemMetadata, MetadataKind},
     ty::{type_, Type},
 };
 
@@ -196,11 +196,36 @@ named!(string<CompleteStr, String>, do_parse!(
         (String(&x)))
 );
 
+// e.g. `personality i32 (i32, i32, i64, %"unwind::libunwind::_Unwind_Exception"*, %"unwind::libunwind::_Unwind_Context"*)* @rust_eh_personality`
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Personality;
+
+named!(personality<CompleteStr, Personality>, do_parse!(
+    tag!("personality") >> space >>
+        type_ >> space >>
+        char!('@') >> ident >>
+        (Personality)
+));
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Metadata<'a> {
+    pub kind: &'a str,
+    pub id: u32,
+}
+
+named!(metadata<CompleteStr, Metadata>, do_parse!(
+    char!('!') >>
+        k: ident >> space >>
+        char!('!') >>
+        id: map_res!(digit, |s: CompleteStr| s.parse::<u32>()) >>
+        (Metadata { kind: k.0, id })
+));
+
 #[cfg(test)]
 mod tests {
     use nom::types::CompleteStr as S;
 
-    use super::{Alias, Comment, FnSig, GetElementPtr, Ident, Local, String, Type};
+    use super::{Alias, Comment, FnSig, GetElementPtr, Ident, Local, Personality, String, Type};
 
     #[test]
     fn alias() {
@@ -303,11 +328,11 @@ mod tests {
     #[test]
     fn string() {
         assert_eq!(
-            // "こんにちわ"
-            super::string(S(r#""\E3\81\93\E3\82\93\E3\81\AB\E3\81\A1\E3\82\8F""#)),
+            // "こんにちは"
+            super::string(S(r#""\E3\81\93\E3\82\93\E3\81\AB\E3\81\A1\E3\81\AF""#)),
             Ok((
                 S(""),
-                String(r#"\E3\81\93\E3\82\93\E3\81\AB\E3\81\A1\E3\82\8F"#)
+                String(r#"\E3\81\93\E3\82\93\E3\81\AB\E3\81\A1\E3\81\AF"#)
             )),
         );
 
@@ -326,6 +351,16 @@ mod tests {
         assert_eq!(
             super::string(S(r#""Hello" "#)),
             Ok((S(" "), String("Hello")))
+        );
+    }
+
+    #[test]
+    fn personality() {
+        assert_eq!(
+            super::personality(S(
+                r#"personality i32 (i32, i32, i64, %"unwind::libunwind::_Unwind_Exception"*, %"unwind::libunwind::_Unwind_Context"*)* @rust_eh_personality"#
+            )),
+            Ok((S(""), Personality)),
         );
     }
 }

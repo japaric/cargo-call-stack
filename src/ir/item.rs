@@ -33,7 +33,31 @@ pub enum Item<'a> {
     Attributes,
 
     // `!0 = !DIGlobalVariableExpression(var: !1, expr: !DIExpression())`
-    Metadata,
+    Metadata(Metadata<'a>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Metadata<'a> {
+    // `!llvm.module.flags = !{!1041, !1042, !1043}`
+    Named,
+
+    // `!6 = !{!7}`
+    Unnamed { id: u32, kind: MetadataKind<'a> },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum MetadataKind<'a> {
+    // `!{!1, !2}`
+    Set(Vec<u32>),
+
+    // `!{!"drop", "Trait"}`
+    Drop { trait_: &'a str },
+
+    // `!{!"dyn", !"Trait", !"method"}`
+    Dyn { trait_: &'a str, method: &'a str },
+
+    // `!{!"fn", !"fn() -> i32"}`
+    Fn { sig: &'a str },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -150,9 +174,52 @@ named!(attributes<CompleteStr, Item>, do_parse!(
 
 named!(metadata<CompleteStr, Item>, do_parse!(
     tag!("!") >>
-    // NOTE shortcut
-        not_line_ending >>
-        (Item::Metadata)
+        meta: alt!(
+            do_parse!(
+                id: map_res!(digit, |cs: CompleteStr| cs.0.parse::<u32>()) >> space >>
+                    char!('=') >> space >>
+                    kind: metadata_kind >>
+                    (Metadata::Unnamed { id, kind })) |
+            do_parse!(not_line_ending >> (Metadata::Named))
+        ) >>
+        (Item::Metadata(meta))
+));
+
+named!(metadata_kind<CompleteStr, MetadataKind>, do_parse!(
+    tag!("!{") >>
+    kind: alt!(
+        do_parse!(
+            tag!("!\"drop\",") >> space >>
+                char!('!') >>
+                t: call!(super::string) >>
+                (MetadataKind::Drop { trait_: t.0 })
+        ) |
+        do_parse!(
+            tag!("!\"dyn\",") >> space >>
+                char!('!') >>
+                t: call!(super::string) >> char!(',') >> space >>
+                char!('!') >>
+                m: call!(super::string) >>
+                (MetadataKind::Dyn { trait_: t.0, method: m.0 })) |
+        do_parse!(
+            tag!("!\"fn\",") >> space >>
+                char!('!') >>
+                s: call!(super::string) >>
+                (MetadataKind::Fn { sig: s.0 })
+        ) |
+        do_parse!(
+            ids: separated_list!(
+                do_parse!(char!(',') >> space >> (())),
+                do_parse!(
+                    char!('!') >>
+                        n: map_res!(digit, |cs: CompleteStr| cs.0.parse::<u32>()) >>
+                        (n)
+                )
+            ) >>
+                (MetadataKind::Set(ids))
+        )
+    ) >> space0 >> tag!("}") >>
+        (kind)
 ));
 
 named!(pub item<CompleteStr, Item>, alt!(
@@ -172,7 +239,7 @@ named!(pub item<CompleteStr, Item>, alt!(
 mod tests {
     use nom::types::CompleteStr as S;
 
-    use crate::ir::{Declare, FnSig, Item, Type};
+    use crate::ir::{Declare, FnSig, Item, ItemMetadata, MetadataKind, Type};
 
     #[test]
     fn alias() {
@@ -223,6 +290,58 @@ mod tests {
         assert_eq!(
             super::type_(S("%\"blue_pill::ItmLogger\" = type {}")),
             Ok((S(""), Item::Type))
+        );
+    }
+
+    #[test]
+    fn metadata() {
+        assert_eq!(
+            super::metadata(S("!449 = !{!54, !450}")),
+            Ok((
+                S(""),
+                Item::Metadata(ItemMetadata::Unnamed {
+                    id: 449,
+                    kind: MetadataKind::Set(vec![54, 450])
+                })
+            ))
+        );
+
+        assert_eq!(
+            super::metadata(S(r#"!141 = !{!"dyn", !"Foo", !"foo"}"#)),
+            Ok((
+                S(""),
+                Item::Metadata(ItemMetadata::Unnamed {
+                    id: 141,
+                    kind: MetadataKind::Dyn {
+                        trait_: "Foo",
+                        method: "foo"
+                    },
+                })
+            ))
+        );
+
+        assert_eq!(
+            super::metadata(S(r#"!127 = !{!"drop", !"Foo"}"#)),
+            Ok((
+                S(""),
+                Item::Metadata(ItemMetadata::Unnamed {
+                    id: 127,
+                    kind: MetadataKind::Drop { trait_: "Foo" },
+                })
+            ))
+        );
+
+        assert_eq!(
+            super::metadata(S(r#"!98 = !{!"fn", !"fn() -> bool"}"#)),
+            Ok((
+                S(""),
+                Item::Metadata(ItemMetadata::Unnamed {
+                    id: 98,
+                    kind: MetadataKind::Fn {
+                        sig: "fn() -> bool"
+                    },
+                })
+            ))
         );
     }
 }

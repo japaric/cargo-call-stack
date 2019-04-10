@@ -1,12 +1,13 @@
 use nom::{types::CompleteStr, *};
 
-use crate::ir::{FnSig, Type};
+use crate::ir::{FnSig, Metadata, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Define<'a> {
     pub name: &'a str,
     pub sig: FnSig<'a>,
     pub stmts: Vec<Stmt<'a>>,
+    pub meta: Vec<Metadata<'a>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -18,7 +19,7 @@ pub enum Stmt<'a> {
 
     DirectCall(&'a str),
 
-    IndirectCall(FnSig<'a>),
+    IndirectCall(FnSig<'a>, Vec<Metadata<'a>>),
 
     Comment,
 
@@ -48,12 +49,19 @@ named!(pub parse<CompleteStr, Define>, do_parse!(
         inputs: separated_list!(
             do_parse!(char!(',') >> space >> (())),
             map!(parameter, |p| p.0)
-        ) >> char!(')') >>
-    // TODO we likely want to parse the metadata (`!dbg !0`) that comes after the parameter list
-        not_line_ending >> line_ending >>
+        ) >> char!(')') >> space >>
+    // usually just a single `unnamed_addr`
+        many0!(do_parse!(call!(super::attribute) >> space >> (()))) >>
+    // e.g. `#0`
+        opt!(do_parse!(char!('#') >> digit >> space >> (()))) >>
+        opt!(do_parse!(call!(super::personality) >> space >> (()))) >>
+    // e.g. `section ".HardFault.default"`
+        opt!(do_parse!(tag!("section") >> space >> call!(super::string) >> space >> (()))) >>
+        meta: many0!(do_parse!(meta: call!(super::metadata) >> space >> (meta))) >>
+        char!('{') >> line_ending >>
         stmts: separated_nonempty_list!(many1!(line_ending), call!(super::define::stmt)) >>
         opt!(line_ending) >> tag!("}") >>
-        (Define { name: name.0, stmts, sig: FnSig { inputs, output: output.map(Box::new) } })
+        (Define { name: name.0, stmts, sig: FnSig { inputs, output: output.map(Box::new) }, meta })
 ));
 
 named!(label<CompleteStr, Stmt>, do_parse!(
@@ -133,10 +141,14 @@ named!(indirect_call<CompleteStr, Stmt>, do_parse!(
             ),
             char!(')')
         ) >>
-    // TODO we likely want to parse the metadata (`!dbg !0`) that comes after the argument list
-    // NOTE shortcut
-        not_line_ending >>
-        (Stmt::IndirectCall(FnSig { inputs, output: output.map(Box::new) }))
+        // same argument list may be followed by an attribute (?) of the form `#123`
+        opt!(do_parse!(space >> char!('#') >> digit >> ())) >>
+        metas: many0!(do_parse!(
+            char!(',') >> space
+                >> meta: call!(super::metadata) >>
+                (meta))
+        ) >>
+        (Stmt::IndirectCall(FnSig { inputs, output: output.map(Box::new) }, metas))
 ));
 
 named!(other<CompleteStr, Stmt>, do_parse!(
@@ -169,7 +181,7 @@ mod tests {
     use nom::types::CompleteStr as S;
 
     use super::{Argument, Define, Parameter};
-    use crate::ir::{FnSig, Stmt, Type};
+    use crate::ir::{FnSig, Metadata, Stmt, Type};
 
     #[test]
     fn argument() {
@@ -247,7 +259,7 @@ mod tests {
                     Type::Integer(32),
                 ],
                 output: Some(Box::new(Type::Integer(1))),
-            })))
+            }, vec![Metadata { kind: "dbg", id: 30714 }, Metadata { kind: "noalias", id: 30727 }])))
         );
 
         assert_eq!(
@@ -292,10 +304,16 @@ mod tests {
             super::indirect_call(S(r#"tail call i32 %0(i32 0) #8, !dbg !1200"#)),
             Ok((
                 S(""),
-                Stmt::IndirectCall(FnSig {
-                    inputs: vec![Type::Integer(32)],
-                    output: Some(Box::new(Type::Integer(32)))
-                })
+                Stmt::IndirectCall(
+                    FnSig {
+                        inputs: vec![Type::Integer(32)],
+                        output: Some(Box::new(Type::Integer(32)))
+                    },
+                    vec![Metadata {
+                        kind: "dbg",
+                        id: 1200
+                    }]
+                )
             ))
         );
 
@@ -310,7 +328,7 @@ mod tests {
                         Type::Integer(64),
                     ],
                     output: Some(Box::new(Type::Integer(1)))
-                })
+                }, vec![Metadata { kind: "dbg", id: 4725 }, Metadata { kind: "noalias", id: 4742 }])
             ))
         );
 
@@ -325,7 +343,7 @@ mod tests {
                         Type::Integer(32),
                     ],
                     output: Some(Box::new(Type::Integer(1)))
-                })
+                }, vec![Metadata { kind: "dbg", id: 5301 }])
             ))
         );
     }
@@ -398,6 +416,7 @@ start:
                          inputs: vec![Type::Pointer(Box::new(Type::Alias("blue_pill::ItmLogger")))],
                          output: None,
                      },
+                     meta: vec![Metadata { kind: "dbg", id: 2105 }],
                  }))
         );
 
@@ -423,6 +442,7 @@ start:
                          ],
                          output: None,
                      },
+                     meta: vec![Metadata{ kind: "dbg", id: 5158 }],
                  }))
         );
 
@@ -458,6 +478,7 @@ start:
                          ],
                          output: None,
                      },
+                     meta: vec![Metadata { kind: "dbg", id: 6634 }],
                  }))
         );
 
@@ -482,6 +503,10 @@ start:
                             })
                         )))))),
                     },
+                    meta: vec![Metadata {
+                        kind: "dbg",
+                        id: 1272
+                    }],
                 }
             ))
         );
@@ -509,7 +534,32 @@ start:
                         inputs: vec![Type::Float],
                         output: Some(Box::new(Type::Float)),
                     },
+                    meta: vec![Metadata { kind: "dbg", id: 1183 }],
                 }
+            ))
+        );
+
+        assert_eq!(
+            super::parse(S(
+                r#"define void @HardFault_(%ExceptionFrame* noalias nocapture readonly align 4 dereferenceable(32)) unnamed_addr #7 section ".HardFault.default" !dbg !447 {
+start:
+  ret
+}"#
+            )),
+            Ok((
+                S(""),
+                 Define {
+                     name: "HardFault_",
+                     stmts: vec![
+                         Stmt::Label,
+                         Stmt::Other,
+                     ],
+                     sig: FnSig {
+                         inputs: vec![Type::Pointer(Box::new(Type::Alias("ExceptionFrame")))],
+                         output: None,
+                     },
+                     meta: vec![Metadata { kind: "dbg", id: 447 }],
+                 },
             ))
         );
     }
