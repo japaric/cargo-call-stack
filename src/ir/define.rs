@@ -106,8 +106,7 @@ named!(bitcast_call<CompleteStr, Stmt>, do_parse!(
     opt!(do_parse!(tag!("tail") >> space >> (()))) >>
         // XXX can this be `invoke`?
         tag!("call") >> space >>
-        // not seen in practice (yet?)
-        // many0!(do_parse!(call!(super::attribute) >> space >> (()))) >>
+        many0!(do_parse!(call!(super::attribute) >> space >> (()))) >>
         alt!(map!(call!(super::type_), drop) | map!(tag!("void"), drop)) >> space >>
         name: call!(super::bitcast) >>
     // NOTE shortcut
@@ -275,6 +274,13 @@ mod tests {
                 r#"tail call i32 bitcast (i8* @__sbss to i32 ()*)() #6, !dbg !1177"#
             )),
             Ok((S(""), Stmt::BitcastCall(Some("__sbss"))))
+        );
+
+        assert_eq!(
+            super::bitcast_call(S(
+                r#"call fastcc void bitcast (void (%"ffi::os_str::OsString"*)* @_ZN4core3ptr18real_drop_in_place17h2168fd684d812c41E.llvm.2785664846165171500 to void (%"alloc::vec::Vec<u8>"*)*)(%"alloc::vec::Vec<u8>"* nonnull align 8 dereferenceable(24) %39) #22, !noalias !75"#
+            )),
+            Ok((S(""), Stmt::BitcastCall(Some("_ZN4core3ptr18real_drop_in_place17h2168fd684d812c41E.llvm.2785664846165171500"))))
         );
     }
 
