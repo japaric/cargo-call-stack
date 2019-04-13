@@ -97,6 +97,7 @@ named!(argument<CompleteStr, Argument>, do_parse!(
         alt!(
             map!(call!(super::bitcast), drop) |
             map!(call!(super::getelementptr), drop) |
+            map!(call!(super::inttoptr), drop) |
             map!(super::local, drop) |
             map!(digit, drop)) >>
         (Argument(ty))
@@ -350,6 +351,19 @@ mod tests {
                     ],
                     output: Some(Box::new(Type::Integer(1)))
                 }, vec![Metadata { kind: "dbg", id: 5301 }])
+            ))
+        );
+
+        assert_eq!(
+            super::indirect_call(S(r#"tail call void %4({}* nonnull align 1 inttoptr (i32 1 to {}*)) #9, !dbg !339, !rust !209"#)),
+            Ok((
+                S(""),
+                Stmt::IndirectCall(FnSig {
+                    inputs: vec![
+                        Type::Pointer(Box::new(Type::Struct(vec![]))),
+                    ],
+                    output: None,
+                }, vec![Metadata { kind: "dbg", id: 339 }, Metadata { kind: "rust", id: 209 }])
             ))
         );
     }

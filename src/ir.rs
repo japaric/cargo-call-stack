@@ -116,7 +116,8 @@ named!(attribute<CompleteStr, Attribute>, do_parse!(
         CompleteStr("double") |CompleteStr("float") | CompleteStr("void") =>
             do_parse!(none_of!(" ") >> (())) |
         // have this branch always error because there are not attributes but operations
-        CompleteStr("bitcast") | CompleteStr("getelementptr") => do_parse!(none_of!(" ") >> (())) |
+        CompleteStr("bitcast") | CompleteStr("getelementptr") | CompleteStr("inttoptr") =>
+            do_parse!(none_of!(" ") >> (())) |
         // have this branch always error because there are not attributes but keywords
         CompleteStr("alias") | CompleteStr("global") | CompleteStr("constant") =>
             do_parse!(none_of!(" ") >> (())) |
@@ -140,6 +141,25 @@ named!(bitcast<CompleteStr, Bitcast>, do_parse!(
             ),
             char!(')')
         ) >> (Bitcast(name))
+));
+
+// NOTE constant operation
+// e.g. `inttoptr (i32 1 to {}*)`
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct IntToPtr;
+
+named!(inttoptr<CompleteStr, IntToPtr>, do_parse!(
+    tag!("inttoptr") >> space >>
+        delimited!(
+            char!('('),
+            do_parse!(
+                call!(type_) >> space >>
+                    digit >> space >>
+                    tag!("to") >> space >>
+                    call!(type_) >> (())
+            ),
+            char!(')')
+        ) >> (IntToPtr)
 ));
 
 // NOTE constant operation
