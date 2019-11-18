@@ -57,7 +57,7 @@ named!(pub parse<CompleteStr, Define>, do_parse!(
 ));
 
 named!(label<CompleteStr, Stmt>, do_parse!(
-    alt!(map!(super::ident, drop) | map!(super::string, drop)) >>
+    alt!(map!(super::ident, drop) | map!(super::string, drop) | map!(digit, drop)) >>
         char!(':') >>
         opt!(do_parse!(space >> call!(super::comment) >> ())) >>
         (Stmt::Label)
