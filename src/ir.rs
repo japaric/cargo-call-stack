@@ -54,7 +54,7 @@ impl<'a> fmt::Display for FnSig<'a> {
 pub fn parse(ll: &str) -> Result<Vec<Item>, failure::Error> {
     items(ll).map(|t| t.1).map_err(|e| {
         failure::format_err!(
-            "BUG: failed to parse .ll file; please submit a bug report. Details:\n{:?}",
+            "BUG: failed to parse .ll file; please submit a bug report with Rust source code. Details (include the _first_ LLVM item, e.g. `define .. {{ .. }}`, in the report):\n{:?}",
             e
         )
     })
