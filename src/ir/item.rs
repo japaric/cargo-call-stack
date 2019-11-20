@@ -1,4 +1,11 @@
-use nom::{types::CompleteStr, *};
+use nom::{
+    branch::alt,
+    bytes::complete::tag,
+    character::complete::{char, not_line_ending, space0, space1},
+    combinator::map,
+    multi::{many0, separated_list},
+    IResult,
+};
 
 use crate::ir::{define::Define, FnSig};
 
@@ -42,154 +49,177 @@ pub struct Declare<'a> {
     pub sig: Option<FnSig<'a>>,
 }
 
-named!(comment<CompleteStr, Item>, map!(super::comment, |_| Item::Comment));
+fn comment(i: &str) -> IResult<&str, Item> {
+    let i = super::comment(i)?.0;
+    Ok((i, Item::Comment))
+}
 
-named!(source_filename<CompleteStr, Item>, do_parse!(
-    tag!("source_filename") >> space >>
-        char!('=') >> not_line_ending >> // shortcut
-        (Item::SourceFilename)
-));
-
-named!(target<CompleteStr, Item>, do_parse!(
-    tag!("target") >> space >>
-        alt!(tag!("datalayout") | tag!("triple")) >> space >>
-        char!('=') >> not_line_ending >> // shortcut
-        (Item::Target)
-));
-
-named!(alias<CompleteStr, Item>, do_parse!(
-    name: call!(super::function) >> space >>
-        char!('=') >> space >>
-        many0!(do_parse!(call!(super::attribute) >> space >> (()))) >>
-        tag!("alias") >> space >>
-        call!(super::type_) >> space0 >>
-        char!(',') >> space >>
-        call!(super::type_) >> space >>
-        alias: call!(super::function) >>
-        (Item::Alias(name.0, alias.0))
-));
-
-named!(global<CompleteStr, Item>, do_parse!(
-    call!(super::global) >> space >>
-        char!('=') >> space >>
-        many0!(do_parse!(call!(super::attribute) >> space >> (()))) >>
-        alt!(tag!("global") | tag!("constant")) >> space >>
-        not_line_ending >>
-        (Item::Global)
-));
-
-named!(type_<CompleteStr, Item>, do_parse!(
-    call!(super::alias) >> space >>
-        char!('=') >>
+fn source_filename(i: &str) -> IResult<&str, Item> {
+    let i = tag("source_filename")(i)?.0;
+    let i = space1(i)?.0;
+    let i = char('=')(i)?.0;
     // NOTE shortcut
-        not_line_ending >>
-        (Item::Type)
-));
+    let i = not_line_ending(i)?.0;
+    Ok((i, Item::SourceFilename))
+}
 
-// named!(declare<CompleteStr, Item>, do_parse!(
-//     tag!("declare") >> space >>
-//         many0!(do_parse!(call!(super::attribute) >> space >> (()))) >>
-//         output: alt!(map!(call!(super::type_), Some) | map!(tag!("void"), |_|)) >> space >>
-//         name: call!(super::function) >>
-//         char!('(') >>
-//     // NOTE shortcut
-//         not_line_ending >>
-//         (Item::Declare(name.0))
-// ));
+fn target(i: &str) -> IResult<&str, Item> {
+    let i = tag("target")(i)?.0;
+    let i = space1(i)?.0;
+    let i = alt((tag("datalayout"), tag("triple")))(i)?.0;
+    let i = space1(i)?.0;
+    let i = char('=')(i)?.0;
+    // NOTE shortcut
+    let i = not_line_ending(i)?.0;
+    Ok((i, Item::Target))
+}
 
-fn declare(input: CompleteStr) -> IResult<CompleteStr, Item> {
-    let (rest, (output, name)) = do_parse!(
-        input,
-        tag!("declare")
-            >> space
-            >> many0!(do_parse!(call!(super::attribute) >> space >> (())))
-            >> output: alt!(map!(call!(super::type_), Some) | map!(tag!("void"), |_| None))
-            >> space
-            >> name: call!(super::function)
-            >> char!('(')
-            >> ((output, name.0))
-    )?;
+fn alias(i: &str) -> IResult<&str, Item> {
+    let (i, name) = super::function(i)?;
+    let i = space1(i)?.0;
+    let i = char('=')(i)?.0;
+    let i = space1(i)?.0;
+    let i = many0(|i| {
+        let i = super::attribute(i)?.0;
+        space1(i)
+    })(i)?
+    .0;
+    let i = tag("alias")(i)?.0;
+    let i = space1(i)?.0;
+    let i = super::type_(i)?.0;
+    let i = space0(i)?.0;
+    let i = char(',')(i)?.0;
+    let i = space1(i)?.0;
+    let i = super::type_(i)?.0;
+    let i = space1(i)?.0;
+    let (i, alias) = super::function(i)?;
+    Ok((i, Item::Alias(name.0, alias.0)))
+}
 
+fn global(i: &str) -> IResult<&str, Item> {
+    let i = super::global(i)?.0;
+    let i = space1(i)?.0;
+    let i = char('=')(i)?.0;
+    let i = space1(i)?.0;
+    let i = many0(|i| {
+        let i = super::attribute(i)?.0;
+        space1(i)
+    })(i)?
+    .0;
+    let i = alt((tag("global"), tag("constant")))(i)?.0;
+    let i = space1(i)?.0;
+    // NOTE shortcut
+    let i = not_line_ending(i)?.0;
+    Ok((i, Item::Global))
+}
+
+fn type_(i: &str) -> IResult<&str, Item> {
+    let i = super::alias(i)?.0;
+    let i = space1(i)?.0;
+    let i = char('=')(i)?.0;
+    // NOTE shortcut
+    let i = not_line_ending(i)?.0;
+    Ok((i, Item::Type))
+}
+
+fn declare(i: &str) -> IResult<&str, Item> {
+    let i = tag("declare")(i)?.0;
+    let i = space1(i)?.0;
+    let i = many0(|i| {
+        let i = super::attribute(i)?.0;
+        space1(i)
+    })(i)?
+    .0;
+    let (i, output) = alt((map(super::type_, Some), map(tag("void"), |_| None)))(i)?;
+    let i = space1(i)?.0;
+    let (i, name) = super::function(i)?;
+    let i = char('(')(i)?.0;
+
+    let name = name.0;
     if name.starts_with("llvm.") {
         // llvm intrinsic; we don't care about these
-        do_parse!(
-            rest,
-            not_line_ending >> (Item::Declare(Declare { name, sig: None }))
-        )
+        let i = not_line_ending(i)?.0;
+        Ok((i, Item::Declare(Declare { name, sig: None })))
     } else {
-        do_parse!(
-            rest,
-            inputs:
-                separated_list!(
-                    do_parse!(char!(',') >> space >> (())),
-                    do_parse!(
-                        ty: call!(super::type_)
-                            >> many0!(do_parse!(space >> call!(super::attribute) >> (())))
-                            >> (ty)
-                    )
-                )
-                >> char!(')')
-                >> not_line_ending
-                >> (Item::Declare(Declare {
-                    name,
-                    sig: Some(FnSig {
-                        output: output.map(Box::new),
-                        inputs
-                    })
-                }))
-        )
+        let (i, inputs) = separated_list(
+            |i| {
+                let i = char(',')(i)?.0;
+                space1(i)
+            },
+            |i| {
+                let (i, ty) = super::type_(i)?;
+                let i = many0(|i| {
+                    let i = space1(i)?.0;
+                    super::attribute(i)
+                })(i)?
+                .0;
+                Ok((i, ty))
+            },
+        )(i)?;
+        let i = char(')')(i)?.0;
+        let i = not_line_ending(i)?.0;
+        Ok((
+            i,
+            Item::Declare(Declare {
+                name,
+                sig: Some(FnSig {
+                    output: output.map(Box::new),
+                    inputs,
+                }),
+            }),
+        ))
     }
 }
 
-named!(attributes<CompleteStr, Item>, do_parse!(
-    tag!("attributes") >> space >> char!('#') >>
-        // NOTE shortcut
-        not_line_ending >>
-        (Item::Attributes)
-));
-
-named!(metadata<CompleteStr, Item>, do_parse!(
-    tag!("!") >>
+fn attributes(i: &str) -> IResult<&str, Item> {
+    let i = tag("attributes")(i)?.0;
+    let i = space1(i)?.0;
+    let i = char('#')(i)?.0;
     // NOTE shortcut
-        not_line_ending >>
-        (Item::Metadata)
-));
+    let i = not_line_ending(i)?.0;
+    Ok((i, Item::Attributes))
+}
 
-named!(pub item<CompleteStr, Item>, alt!(
-    comment |
-    source_filename |
-    target |
-    type_ |
-    global |
-    alias |
-    map!(call!(super::define::parse), Item::Define) |
-    declare |
-    attributes |
-    metadata
-));
+fn metadata(i: &str) -> IResult<&str, Item> {
+    let i = tag("!")(i)?.0;
+    // NOTE shortcut
+    let i = not_line_ending(i)?.0;
+    Ok((i, Item::Metadata))
+}
+
+pub fn item(i: &str) -> IResult<&str, Item> {
+    alt((
+        comment,
+        source_filename,
+        target,
+        type_,
+        global,
+        alias,
+        map(super::define::parse, Item::Define),
+        declare,
+        attributes,
+        metadata,
+    ))(i)
+}
 
 #[cfg(test)]
 mod tests {
-    use nom::types::CompleteStr as S;
-
     use crate::ir::{Declare, FnSig, Item, Type};
 
     #[test]
     fn alias() {
         assert_eq!(
-            super::alias(S(
-                r#"@__pre_init = unnamed_addr alias void (), void ()* @DefaultPreInit"#
-            )),
-            Ok((S(""), Item::Alias("__pre_init", "DefaultPreInit")))
+            super::alias(r#"@__pre_init = unnamed_addr alias void (), void ()* @DefaultPreInit"#),
+            Ok(("", Item::Alias("__pre_init", "DefaultPreInit")))
         );
     }
 
     #[test]
     fn declare() {
         assert_eq!(
-            super::declare(S(r#"declare noalias i8* @malloc(i64) unnamed_addr #3"#)),
+            super::declare(r#"declare noalias i8* @malloc(i64) unnamed_addr #3"#),
             Ok((
-                S(""),
+                "",
                 Item::Declare(Declare {
                     name: "malloc",
                     sig: Some(FnSig {
@@ -204,25 +234,21 @@ mod tests {
     #[test]
     fn global() {
         assert_eq!(
-            super::global(S(
-                "@0 = private constant <{ [0 x i8] }> zeroinitializer, align 4, !dbg !0"
-            )),
-            Ok((S(""), Item::Global))
+            super::global("@0 = private constant <{ [0 x i8] }> zeroinitializer, align 4, !dbg !0"),
+            Ok(("", Item::Global))
         );
 
         assert_eq!(
-            super::global(S(
-                "@DEVICE_PERIPHERALS = local_unnamed_addr global <{ [1 x i8] }> zeroinitializer, align 1, !dbg !175"
-            )),
-            Ok((S(""), Item::Global))
+            super::global("@DEVICE_PERIPHERALS = local_unnamed_addr global <{ [1 x i8] }> zeroinitializer, align 1, !dbg !175"),
+            Ok(("", Item::Global))
         );
     }
 
     #[test]
     fn type_() {
         assert_eq!(
-            super::type_(S("%\"blue_pill::ItmLogger\" = type {}")),
-            Ok((S(""), Item::Type))
+            super::type_("%\"blue_pill::ItmLogger\" = type {}"),
+            Ok(("", Item::Type))
         );
     }
 }

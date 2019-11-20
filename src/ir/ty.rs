@@ -1,6 +1,14 @@
 use core::{fmt, str::FromStr};
 
-use nom::{types::CompleteStr, *};
+use nom::{
+    branch::alt,
+    bytes::complete::tag,
+    character::complete::{char, digit1, space0, space1},
+    combinator::{map, map_res, opt},
+    multi::separated_list,
+    sequence::delimited,
+    IResult,
+};
 
 use crate::ir::FnSig;
 
@@ -127,51 +135,72 @@ impl<'a> fmt::Display for Type<'a> {
     }
 }
 
-named!(array<CompleteStr, Type>, delimited!(
-    char!('['),
-    do_parse!(
-        count: map_res!(digit, |cs: CompleteStr| usize::from_str(cs.0)) >> space >>
-            char!('x') >> space >>
-            ty: type_ >>
-            (Type::Array(count, Box::new(ty)))
-    ),
-    char!(']')
-));
+fn array(i: &str) -> IResult<&str, Type> {
+    delimited(
+        char('['),
+        |i| {
+            let (i, count) = map_res(digit1, usize::from_str)(i)?;
+            let i = space1(i)?.0;
+            let i = char('x')(i)?.0;
+            let i = space1(i)?.0;
+            let (i, ty) = type_(i)?;
+            Ok((i, Type::Array(count, Box::new(ty))))
+        },
+        char(']'),
+    )(i)
+}
 
-named!(double<CompleteStr, Type>, map!(tag!("double"), |_| Type::Double));
+fn double(i: &str) -> IResult<&str, Type> {
+    Ok((tag("double")(i)?.0, Type::Double))
+}
 
-named!(float<CompleteStr, Type>, map!(tag!("float"), |_| Type::Float));
+fn float(i: &str) -> IResult<&str, Type> {
+    Ok((tag("float")(i)?.0, Type::Float))
+}
 
-named!(integer<CompleteStr, Type>, do_parse!(
-    char!('i') >>
-       count: map_res!(digit, |cs: CompleteStr| usize::from_str(cs.0)) >>
-        (Type::Integer(count)))
-);
+fn integer(i: &str) -> IResult<&str, Type> {
+    let i = char('i')(i)?.0;
+    let (i, count) = map_res(digit1, usize::from_str)(i)?;
+    Ok((i, Type::Integer(count)))
+}
 
-named!(alias<CompleteStr, Type>, map!(super::alias, |a| Type::Alias(a.0)));
+fn alias(i: &str) -> IResult<&str, Type> {
+    map(super::alias, |a| Type::Alias(a.0))(i)
+}
 
-named!(_struct<CompleteStr, Vec<Type>>, do_parse!(
-    char!('{') >> space0 >>
-        fields: separated_list!(do_parse!(char!(',') >> space >> (())), type_) >> space0 >>
-        char!('}') >>
-        (fields)
-));
+fn _struct(i: &str) -> IResult<&str, Vec<Type>> {
+    let i = char('{')(i)?.0;
+    let i = space0(i)?.0;
+    let (i, fields) = separated_list(
+        |i| {
+            let i = char(',')(i)?.0;
+            space1(i)
+        },
+        type_,
+    )(i)?;
+    let i = space0(i)?.0;
+    let i = char('}')(i)?.0;
+    Ok((i, fields))
+}
 
-named!(packed_struct<CompleteStr, Type>, do_parse!(
-    char!('<') >>
-        fields: _struct >>
-        char!('>') >>
-        (Type::PackedStruct(fields))
-));
+fn packed_struct(i: &str) -> IResult<&str, Type> {
+    let i = char('<')(i)?.0;
+    let (i, fields) = _struct(i)?;
+    let i = char('>')(i)?.0;
+    Ok((i, Type::PackedStruct(fields)))
+}
 
-named!(struct_<CompleteStr, Type>, map!(_struct, Type::Struct));
+fn struct_(i: &str) -> IResult<&str, Type> {
+    map(_struct, Type::Struct)(i)
+}
 
-pub fn type_(input: CompleteStr) -> IResult<CompleteStr, Type> {
-    let (rest, void) = opt!(input, tag!("void"))?;
+pub fn type_(i: &str) -> IResult<&str, Type> {
+    let (i, void) = opt(tag("void"))(i)?;
 
     if void.is_some() {
         // this must be a function
-        let (mut rest, inputs) = do_parse!(rest, space >> inputs: fn_inputs >> (inputs))?;
+        let i = space1(i)?.0;
+        let (mut i, inputs) = fn_inputs(i)?;
         let mut ty = Type::Fn(FnSig {
             inputs,
             output: None,
@@ -179,41 +208,42 @@ pub fn type_(input: CompleteStr) -> IResult<CompleteStr, Type> {
 
         // is this a function pointer?
         loop {
-            let (rest_, start) = opt!(rest, char!('*'))?;
+            let (i_, star) = opt(char('*'))(i)?;
 
-            if start.is_none() {
+            if star.is_none() {
                 break;
             } else {
-                rest = rest_;
+                i = i_;
                 ty = Type::Pointer(Box::new(ty));
             }
         }
 
-        Ok((rest, ty))
+        Ok((i, ty))
     } else {
-        let (mut rest, mut ty) = alt!(
-            rest,
-            array | packed_struct | struct_ | alias | double | float | integer
-        )?;
+        let (mut i, mut ty) =
+            alt((array, packed_struct, struct_, alias, double, float, integer))(i)?;
 
         // is this a pointer?
         loop {
-            let (rest_, start) = opt!(rest, char!('*'))?;
+            let (i_, star) = opt(char('*'))(i)?;
 
-            if start.is_none() {
+            if star.is_none() {
                 break;
             } else {
-                rest = rest_;
+                i = i_;
                 ty = Type::Pointer(Box::new(ty));
             }
         }
 
         // is this a function?
         loop {
-            let (rest_, inputs) = opt!(rest, do_parse!(space >> inputs: fn_inputs >> (inputs)))?;
+            let (i_, inputs) = opt(|i| {
+                let i = space1(i)?.0;
+                fn_inputs(i)
+            })(i)?;
 
             if let Some(inputs) = inputs {
-                rest = rest_;
+                i = i_;
                 ty = Type::Fn(FnSig {
                     inputs,
                     output: Some(Box::new(ty)),
@@ -221,12 +251,12 @@ pub fn type_(input: CompleteStr) -> IResult<CompleteStr, Type> {
 
                 // is this a function pointer?
                 loop {
-                    let (rest_, start) = opt!(rest, char!('*'))?;
+                    let (i_, star) = opt(char('*'))(i)?;
 
-                    if start.is_none() {
+                    if star.is_none() {
                         break;
                     } else {
-                        rest = rest_;
+                        i = i_;
                         ty = Type::Pointer(Box::new(ty));
                     }
                 }
@@ -235,60 +265,64 @@ pub fn type_(input: CompleteStr) -> IResult<CompleteStr, Type> {
             }
         }
 
-        Ok((rest, ty))
+        Ok((i, ty))
     }
 }
 
-named!(fn_inputs<CompleteStr, Vec<Type>>, do_parse!(
-    char!('(') >> space0 >>
-        inputs: separated_list!(do_parse!(char!(',') >> space >> (())), type_) >>
-        char!(')') >>
-        (inputs)
-));
+fn fn_inputs(i: &str) -> IResult<&str, Vec<Type>> {
+    let i = char('(')(i)?.0;
+    let i = space0(i)?.0;
+    let (i, inputs) = separated_list(
+        |i| {
+            let i = char(',')(i)?.0;
+            space1(i)
+        },
+        type_,
+    )(i)?;
+    let i = char(')')(i)?.0;
+    Ok((i, inputs))
+}
 
 #[cfg(test)]
 mod tests {
-    use nom::types::CompleteStr as S;
-
     use crate::ir::{FnSig, Type};
 
     #[test]
     fn fn_inputs() {
-        assert_eq!(super::fn_inputs(S(r#"()"#)), Ok((S(""), vec![])));
+        assert_eq!(super::fn_inputs(r#"()"#), Ok(("", vec![])));
     }
 
     #[test]
     fn sanity() {
-        assert_eq!(super::integer(S("i8")), Ok((S(""), Type::Integer(8))));
-        assert_eq!(super::integer(S("i16")), Ok((S(""), Type::Integer(16))));
-        assert_eq!(super::integer(S("i32")), Ok((S(""), Type::Integer(32))));
+        assert_eq!(super::integer("i8"), Ok(("", Type::Integer(8))));
+        assert_eq!(super::integer("i16"), Ok(("", Type::Integer(16))));
+        assert_eq!(super::integer("i32"), Ok(("", Type::Integer(32))));
 
         assert_eq!(
-            super::array(S("[0 x i32]")),
-            Ok((S(""), Type::Array(0, Box::new(Type::Integer(32)))))
+            super::array("[0 x i32]"),
+            Ok(("", Type::Array(0, Box::new(Type::Integer(32)))))
         );
         assert_eq!(
-            super::array(S("[11 x i8]")),
-            Ok((S(""), Type::Array(11, Box::new(Type::Integer(8)))))
+            super::array("[11 x i8]"),
+            Ok(("", Type::Array(11, Box::new(Type::Integer(8)))))
         );
 
         assert_eq!(
-            super::struct_(S("{ i8, i16 }")),
-            Ok((
-                S(""),
-                Type::Struct(vec![Type::Integer(8), Type::Integer(16)])
-            ))
+            super::struct_("{ i8, i16 }"),
+            Ok(("", Type::Struct(vec![Type::Integer(8), Type::Integer(16)])))
         );
-        assert_eq!(super::struct_(S("{}")), Ok((S(""), Type::Struct(vec![]))));
+        assert_eq!(super::struct_("{}"), Ok(("", Type::Struct(vec![]))));
 
         // nested
         assert_eq!(
-            super::struct_(S("{ \
-                              { i8, i16 }, \
-                              { i8*, i16* } \
-                              }")),
+            super::struct_(
+                "{ \
+                 { i8, i16 }, \
+                 { i8*, i16* } \
+                 }"
+            ),
             Ok((
-                S(""),
+                "",
                 Type::Struct(vec![
                     Type::Struct(vec![Type::Integer(8), Type::Integer(16)]),
                     Type::Struct(vec![
@@ -300,23 +334,23 @@ mod tests {
         );
 
         assert_eq!(
-            super::type_(S("i8*")),
-            Ok((S(""), Type::Pointer(Box::new(Type::Integer(8)))))
+            super::type_("i8*"),
+            Ok(("", Type::Pointer(Box::new(Type::Integer(8)))))
         );
 
         assert_eq!(
-            super::type_(S("i8**")),
+            super::type_("i8**"),
             Ok((
-                S(""),
+                "",
                 Type::Pointer(Box::new(Type::Pointer(Box::new(Type::Integer(8)))))
             ))
         );
 
         // function pointers
         assert_eq!(
-            super::type_(S("void (i8*)*")),
+            super::type_("void (i8*)*"),
             Ok((
-                S(""),
+                "",
                 Type::Pointer(Box::new(Type::Fn(FnSig {
                     inputs: vec![Type::Pointer(Box::new(Type::Integer(8)))],
                     output: None,
@@ -325,9 +359,9 @@ mod tests {
         );
 
         assert_eq!(
-            super::type_(S("i8 (i8)*")),
+            super::type_("i8 (i8)*"),
             Ok((
-                S(""),
+                "",
                 Type::Pointer(Box::new(Type::Fn(FnSig {
                     inputs: vec![Type::Integer(8)],
                     output: Some(Box::new(Type::Integer(8))),
@@ -336,9 +370,9 @@ mod tests {
         );
 
         assert_eq!(
-            super::type_(S("void ()**")),
+            super::type_("void ()**"),
             Ok((
-                S(""),
+                "",
                 Type::Pointer(Box::new(Type::Pointer(Box::new(Type::Fn(FnSig {
                     inputs: vec![],
                     output: None,

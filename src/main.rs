@@ -1,4 +1,4 @@
-// #![deny(warnings)]
+#![deny(warnings)]
 
 use core::{
     cmp,
@@ -55,6 +55,7 @@ const FONT: &str = "monospace";
 // Version we analyzed to extract some ad-hoc information
 const VERS: &str = "1.33.0"; // compiler-builtins = "0.1.4"
 
+#[allow(deprecated)]
 fn run() -> Result<i32, failure::Error> {
     Builder::from_env(Env::default().default_filter_or("warn")).init();
 
@@ -831,8 +832,15 @@ fn run() -> Result<i32, failure::Error> {
                     // XXX unclear whether these produce library calls on some platforms or not
                     if func.starts_with("llvm.bswap.")
                         | func.starts_with("llvm.ctlz.")
+                        | func.starts_with("llvm.cttz.")
+                        | func.starts_with("llvm.sadd.with.overflow.")
+                        | func.starts_with("llvm.smul.with.overflow.")
+                        | func.starts_with("llvm.ssub.with.overflow.")
                         | func.starts_with("llvm.uadd.with.overflow.")
                         | func.starts_with("llvm.umul.with.overflow.")
+                        | func.starts_with("llvm.usub.sat.")
+                        | func.starts_with("llvm.usub.with.overflow.")
+                        | func.starts_with("llvm.x86.sse2.pmovmskb.")
                     {
                         if !llvm_seen.contains(func) {
                             llvm_seen.insert(func);
