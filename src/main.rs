@@ -1,4 +1,4 @@
-// #![deny(warnings)]
+#![deny(warnings)]
 
 use core::{
     cmp,
@@ -55,6 +55,7 @@ const FONT: &str = "monospace";
 // Version we analyzed to extract some ad-hoc information
 const VERS: &str = "1.33.0"; // compiler-builtins = "0.1.4"
 
+#[allow(deprecated)]
 fn run() -> Result<i32, failure::Error> {
     Builder::from_env(Env::default().default_filter_or("warn")).init();
 
