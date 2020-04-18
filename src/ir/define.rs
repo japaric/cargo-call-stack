@@ -420,6 +420,11 @@ mod tests {
             ),
             Ok(("", Stmt::DirectCall("ioctl")))
         );
+
+        assert_eq!(
+            super::direct_call(r#"call <4 x i32> @llvm.bswap.v4i32(<4 x i32> %2481)"#),
+            Ok(("", Stmt::DirectCall("llvm.bswap.v4i32")))
+        );
     }
 
     #[test]

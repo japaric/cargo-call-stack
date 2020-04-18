@@ -43,7 +43,10 @@ pub enum Type<'a> {
     Pointer(Box<Type<'a>>),
 
     // `...`
-    Varargs
+    Varargs,
+
+    // `<4 x i32>` See: https://llvm.org/doxygen/classllvm_1_1MVT.html
+    MVTVector(usize, Box<Type<'a>>),
 }
 
 impl<'a> Type<'a> {
@@ -135,6 +138,13 @@ impl<'a> fmt::Display for Type<'a> {
             Type::Varargs => {
                 f.write_str("...")?;
             }
+            Type::MVTVector(count, ty) => {
+                f.write_str("<")?;
+                write!(f, "{}", count)?;
+                f.write_str(" x ")?;
+                write!(f, "{}", ty)?;
+                f.write_str(">")?;
+            }
         }
 
         Ok(())
@@ -153,6 +163,21 @@ fn array(i: &str) -> IResult<&str, Type> {
             Ok((i, Type::Array(count, Box::new(ty))))
         },
         char(']'),
+    )(i)
+}
+
+fn mvt_vector(i: &str) -> IResult<&str, Type> {
+    delimited(
+        char('<'),
+        |i| {
+            let (i, count) = map_res(digit1, usize::from_str)(i)?;
+            let i = space1(i)?.0;
+            let i = char('x')(i)?.0;
+            let i = space1(i)?.0;
+            let (i, ty) = type_(i)?;
+            Ok((i, Type::MVTVector(count, Box::new(ty))))
+        },
+        char('>'),
     )(i)
 }
 
@@ -230,8 +255,17 @@ pub fn type_(i: &str) -> IResult<&str, Type> {
 
         Ok((i, ty))
     } else {
-        let (mut i, mut ty) =
-            alt((array, packed_struct, struct_, alias, double, float, integer, varargs))(i)?;
+        let (mut i, mut ty) = alt((
+            array,
+            packed_struct,
+            struct_,
+            alias,
+            double,
+            float,
+            integer,
+            varargs,
+            mvt_vector,
+        ))(i)?;
 
         // is this a pointer?
         loop {
@@ -394,5 +428,13 @@ mod tests {
     #[test]
     fn varargs() {
         assert_eq!(super::varargs(r#"..."#), Ok(("", Type::Varargs)));
+    }
+
+    #[test]
+    fn mvt_vector() {
+        assert_eq!(
+            super::mvt_vector(r#"<4 x i32>"#),
+            Ok(("", Type::MVTVector(4, Box::new(Type::Integer(32)))))
+        );
     }
 }
