@@ -225,6 +225,7 @@ fn indirect_call(i: &str) -> IResult<&str, Stmt> {
     let i = char('%')(i)?.0;
     let i = opt(char('_'))(i)?.0;
     let i = digit1(i)?.0;
+    let i = many0(|i| tag(".i")(i))(i)?.0;
     let (i, inputs) = delimited(
         char('('),
         separated_list(
@@ -480,6 +481,17 @@ mod tests {
                 Stmt::IndirectCall(FnSig {
                     inputs: vec![],
                     output: Some(Box::new(Type::Integer(1))),
+                })
+            ))
+        );
+
+        assert_eq!(
+            super::indirect_call("tail call i32 %_23.i(i8 %f.1)"),
+            Ok((
+                "",
+                Stmt::IndirectCall(FnSig {
+                    inputs: vec![Type::Integer(8)],
+                    output: Some(Box::new(Type::Integer(32))),
                 })
             ))
         );
