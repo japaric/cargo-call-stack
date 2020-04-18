@@ -171,12 +171,11 @@ fn bitcast_call(i: &str) -> IResult<&str, Stmt> {
     let i = tag("call")(i)?.0;
     let i = space1(i)?.0;
 
-    // not seen in practice (yet?)
-    // let i = many0(|i| {
-    //     let i = super::attribute(i)?.0;
-    //     space1(i)
-    // })(i)?
-    // .0;
+    let i = many0(|i| {
+        let i = super::attribute(i)?.0;
+        space1(i)
+    })(i)?
+    .0;
 
     let i = alt((map(super::type_, drop), map(tag("void"), drop)))(i)?.0;
     let i = space1(i)?.0;
@@ -389,7 +388,7 @@ mod tests {
     fn bitcast_call() {
         assert_eq!(
             super::bitcast_call(
-                r#"tail call i32 bitcast (i8* @__sbss to i32 ()*)() #6, !dbg !1177"#
+                r#"tail call fastcc i32 bitcast (i8* @__sbss to i32 ()*)() #6, !dbg !1177"#
             ),
             Ok(("", Stmt::BitcastCall(Some("__sbss"))))
         );
