@@ -413,6 +413,13 @@ mod tests {
             super::direct_call(r#"tail call i32 @llvm.bswap.i32(i32 %page.0.i) #9"#),
             Ok(("", Stmt::DirectCall("llvm.bswap.i32")))
         );
+
+        assert_eq!(
+            super::direct_call(
+                r#"call i32 (i32, i64, ...) @ioctl(i32 %175, i64 1074295912, i64* nonnull %152) #10, !noalias !5657"#
+            ),
+            Ok(("", Stmt::DirectCall("ioctl")))
+        );
     }
 
     #[test]

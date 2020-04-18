@@ -41,6 +41,9 @@ pub enum Type<'a> {
 
     // `i8*`
     Pointer(Box<Type<'a>>),
+
+    // `...`
+    Varargs
 }
 
 impl<'a> Type<'a> {
@@ -129,6 +132,9 @@ impl<'a> fmt::Display for Type<'a> {
                 write!(f, "{}", ty)?;
                 f.write_str("*")?;
             }
+            Type::Varargs => {
+                f.write_str("...")?;
+            }
         }
 
         Ok(())
@@ -166,6 +172,10 @@ fn integer(i: &str) -> IResult<&str, Type> {
 
 fn alias(i: &str) -> IResult<&str, Type> {
     map(super::alias, |a| Type::Alias(a.0))(i)
+}
+
+fn varargs(i: &str) -> IResult<&str, Type> {
+    Ok((tag("...")(i)?.0, Type::Varargs))
 }
 
 fn _struct(i: &str) -> IResult<&str, Vec<Type>> {
@@ -221,7 +231,7 @@ pub fn type_(i: &str) -> IResult<&str, Type> {
         Ok((i, ty))
     } else {
         let (mut i, mut ty) =
-            alt((array, packed_struct, struct_, alias, double, float, integer))(i)?;
+            alt((array, packed_struct, struct_, alias, double, float, integer, varargs))(i)?;
 
         // is this a pointer?
         loop {
@@ -379,5 +389,10 @@ mod tests {
                 })))))
             ))
         );
+    }
+
+    #[test]
+    fn varargs() {
+        assert_eq!(super::varargs(r#"..."#), Ok(("", Type::Varargs)));
     }
 }
