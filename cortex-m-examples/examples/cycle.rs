@@ -1,4 +1,4 @@
-#![feature(asm)]
+#![feature(llvm_asm)]
 #![no_main]
 #![no_std]
 
@@ -45,7 +45,7 @@ fn baz() {
 #[inline(never)]
 fn quux() {
     // spill variables onto the stack
-    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
+    unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
 }
 
 #[exception]
