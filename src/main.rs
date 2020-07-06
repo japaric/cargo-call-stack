@@ -160,7 +160,9 @@ fn run() -> Result<i32, failure::Error> {
         "--emit=llvm-ir,obj",
         // needed to produce a single .ll file
         "-C",
-        "lto",
+        "embed-bitcode=yes",
+        "-C",
+        "lto=fat",
         // stack size information
         "-Z",
         "emit-stack-sizes",

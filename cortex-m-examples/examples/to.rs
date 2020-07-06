@@ -1,4 +1,4 @@
-#![feature(asm)]
+#![feature(llvm_asm)]
 #![no_main]
 #![no_std]
 
@@ -24,7 +24,7 @@ trait Foo {
     // default implementation of this method
     fn foo(&self) -> bool {
         // spill variables onto the stack
-        unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
+        unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
 
         false
     }
@@ -40,7 +40,7 @@ struct Baz;
 impl Foo for Baz {
     // overrides the default method
     fn foo(&self) -> bool {
-        unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
+        unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
 
         true
     }
@@ -52,8 +52,8 @@ impl Quux {
     // not a trait method!
     #[inline(never)]
     fn foo(&self) -> bool {
-        // NOTE(asm!) side effect to preserve function calls to this method
-        unsafe { asm!("NOP" : : : : "volatile") }
+        // NOTE(llvm_asm!) side effect to preserve function calls to this method
+        unsafe { llvm_asm!("NOP" : : : : "volatile") }
 
         false
     }
