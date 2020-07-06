@@ -51,6 +51,11 @@ fn parameter(i: &str) -> IResult<&str, Parameter> {
         super::alias(i)
     })(i)?
     .0;
+    let i = opt(|i| {
+        let i = space1(i)?.0;
+        super::local(i)
+    })(i)?
+    .0;
     Ok((i, Parameter(ty)))
 }
 
@@ -535,6 +540,13 @@ mod tests {
         assert_eq!(
             super::parameter(r#"float"#),
             Ok(("", Parameter(Type::Float)))
+        );
+
+        assert_eq!(
+            super::parameter(
+                r#"%ExceptionFrame* noalias nocapture readonly align 4 dereferenceable(32) %0"#
+            ),
+            Ok(("", Parameter(Type::Pointer(Box::new(Type::Alias("ExceptionFrame"))))))
         );
     }
 
