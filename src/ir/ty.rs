@@ -41,6 +41,12 @@ pub enum Type<'a> {
 
     // `i8*`
     Pointer(Box<Type<'a>>),
+
+    // `...`
+    Varargs,
+
+    // `<4 x i32>` See: https://llvm.org/doxygen/classllvm_1_1MVT.html
+    MVTVector(usize, Box<Type<'a>>),
 }
 
 impl<'a> Type<'a> {
@@ -129,6 +135,16 @@ impl<'a> fmt::Display for Type<'a> {
                 write!(f, "{}", ty)?;
                 f.write_str("*")?;
             }
+            Type::Varargs => {
+                f.write_str("...")?;
+            }
+            Type::MVTVector(count, ty) => {
+                f.write_str("<")?;
+                write!(f, "{}", count)?;
+                f.write_str(" x ")?;
+                write!(f, "{}", ty)?;
+                f.write_str(">")?;
+            }
         }
 
         Ok(())
@@ -150,6 +166,21 @@ fn array(i: &str) -> IResult<&str, Type> {
     )(i)
 }
 
+fn mvt_vector(i: &str) -> IResult<&str, Type> {
+    delimited(
+        char('<'),
+        |i| {
+            let (i, count) = map_res(digit1, usize::from_str)(i)?;
+            let i = space1(i)?.0;
+            let i = char('x')(i)?.0;
+            let i = space1(i)?.0;
+            let (i, ty) = type_(i)?;
+            Ok((i, Type::MVTVector(count, Box::new(ty))))
+        },
+        char('>'),
+    )(i)
+}
+
 fn double(i: &str) -> IResult<&str, Type> {
     Ok((tag("double")(i)?.0, Type::Double))
 }
@@ -166,6 +197,10 @@ fn integer(i: &str) -> IResult<&str, Type> {
 
 fn alias(i: &str) -> IResult<&str, Type> {
     map(super::alias, |a| Type::Alias(a.0))(i)
+}
+
+fn varargs(i: &str) -> IResult<&str, Type> {
+    Ok((tag("...")(i)?.0, Type::Varargs))
 }
 
 fn _struct(i: &str) -> IResult<&str, Vec<Type>> {
@@ -220,8 +255,17 @@ pub fn type_(i: &str) -> IResult<&str, Type> {
 
         Ok((i, ty))
     } else {
-        let (mut i, mut ty) =
-            alt((array, packed_struct, struct_, alias, double, float, integer))(i)?;
+        let (mut i, mut ty) = alt((
+            array,
+            packed_struct,
+            struct_,
+            alias,
+            double,
+            float,
+            integer,
+            varargs,
+            mvt_vector,
+        ))(i)?;
 
         // is this a pointer?
         loop {
@@ -378,6 +422,19 @@ mod tests {
                     output: None,
                 })))))
             ))
+        );
+    }
+
+    #[test]
+    fn varargs() {
+        assert_eq!(super::varargs(r#"..."#), Ok(("", Type::Varargs)));
+    }
+
+    #[test]
+    fn mvt_vector() {
+        assert_eq!(
+            super::mvt_vector(r#"<4 x i32>"#),
+            Ok(("", Type::MVTVector(4, Box::new(Type::Integer(32)))))
         );
     }
 }

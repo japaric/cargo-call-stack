@@ -171,12 +171,11 @@ fn bitcast_call(i: &str) -> IResult<&str, Stmt> {
     let i = tag("call")(i)?.0;
     let i = space1(i)?.0;
 
-    // not seen in practice (yet?)
-    // let i = many0(|i| {
-    //     let i = super::attribute(i)?.0;
-    //     space1(i)
-    // })(i)?
-    // .0;
+    let i = many0(|i| {
+        let i = super::attribute(i)?.0;
+        space1(i)
+    })(i)?
+    .0;
 
     let i = alt((map(super::type_, drop), map(tag("void"), drop)))(i)?.0;
     let i = space1(i)?.0;
@@ -226,6 +225,7 @@ fn indirect_call(i: &str) -> IResult<&str, Stmt> {
     let i = char('%')(i)?.0;
     let i = opt(char('_'))(i)?.0;
     let i = digit1(i)?.0;
+    let i = many0(|i| tag(".i")(i))(i)?.0;
     let (i, inputs) = delimited(
         char('('),
         separated_list(
@@ -389,7 +389,7 @@ mod tests {
     fn bitcast_call() {
         assert_eq!(
             super::bitcast_call(
-                r#"tail call i32 bitcast (i8* @__sbss to i32 ()*)() #6, !dbg !1177"#
+                r#"tail call fastcc i32 bitcast (i8* @__sbss to i32 ()*)() #6, !dbg !1177"#
             ),
             Ok(("", Stmt::BitcastCall(Some("__sbss"))))
         );
@@ -412,6 +412,18 @@ mod tests {
         assert_eq!(
             super::direct_call(r#"tail call i32 @llvm.bswap.i32(i32 %page.0.i) #9"#),
             Ok(("", Stmt::DirectCall("llvm.bswap.i32")))
+        );
+
+        assert_eq!(
+            super::direct_call(
+                r#"call i32 (i32, i64, ...) @ioctl(i32 %175, i64 1074295912, i64* nonnull %152) #10, !noalias !5657"#
+            ),
+            Ok(("", Stmt::DirectCall("ioctl")))
+        );
+
+        assert_eq!(
+            super::direct_call(r#"call <4 x i32> @llvm.bswap.v4i32(<4 x i32> %2481)"#),
+            Ok(("", Stmt::DirectCall("llvm.bswap.v4i32")))
         );
     }
 
@@ -469,6 +481,17 @@ mod tests {
                 Stmt::IndirectCall(FnSig {
                     inputs: vec![],
                     output: Some(Box::new(Type::Integer(1))),
+                })
+            ))
+        );
+
+        assert_eq!(
+            super::indirect_call("tail call i32 %_23.i(i8 %f.1)"),
+            Ok((
+                "",
+                Stmt::IndirectCall(FnSig {
+                    inputs: vec![Type::Integer(8)],
+                    output: Some(Box::new(Type::Integer(32))),
                 })
             ))
         );
