@@ -500,6 +500,19 @@ mod tests {
                 })
             ))
         );
+
+        assert_eq!(
+            super::indirect_call("call void %125({}* nonnull align 1 %_17.0.i.i.i.i.i, i32* nonnull align 4 dereferenceable(180) bitcast (i8* getelementptr inbounds (<{ [228 x i8] }>, <{ [228 x i8] }>* @_ZN17at28c_rs_firmware3APP7usb_dev17h0475a05cee83d665E, i32 0, i32 0, i32 44) to i32*), i16* noalias nonnull readonly align 2 dereferenceable(10) %121) #13, !dbg !14831, !noalias !13140"),
+            Ok((
+                "",
+                Stmt::IndirectCall(FnSig {
+                    inputs: vec![
+                        Type::Pointer(Box::new(Type::Struct(vec![]))), Type::Pointer(Box::new(Type::Integer(32))), Type::Pointer(Box::new(Type::Integer(16)))
+                    ],
+                    output: None,
+                })
+            ))
+        );
     }
 
     #[test]
@@ -546,7 +559,10 @@ mod tests {
             super::parameter(
                 r#"%ExceptionFrame* noalias nocapture readonly align 4 dereferenceable(32) %0"#
             ),
-            Ok(("", Parameter(Type::Pointer(Box::new(Type::Alias("ExceptionFrame"))))))
+            Ok((
+                "",
+                Parameter(Type::Pointer(Box::new(Type::Alias("ExceptionFrame"))))
+            ))
         );
     }
 

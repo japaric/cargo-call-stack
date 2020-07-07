@@ -171,12 +171,17 @@ fn bitcast(i: &str) -> IResult<&str, Bitcast> {
         |i| {
             let i = type_(i)?.0;
             let i = space1(i)?.0;
-            let (i, name) = global(i)?;
+            let (i, name) = alt((
+                map(global, |g| g.0),
+                // TODO(?) on this branch we should return the indices because we could be dealing
+                // with a (statically allocated) struct that contains several function pointers
+                map(getelementptr, |gep| gep.0),
+            ))(i)?;
             let i = space1(i)?.0;
             let i = tag("to")(i)?.0;
             let i = space1(i)?.0;
             let i = type_(i)?.0;
-            Ok((i, Bitcast(name.0)))
+            Ok((i, Bitcast(name)))
         },
         char(')'),
     )(i)
@@ -184,7 +189,7 @@ fn bitcast(i: &str) -> IResult<&str, Bitcast> {
 
 // NOTE constant operation
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct GetElementPtr;
+struct GetElementPtr<'a>(Option<&'a str>);
 
 fn getelementptr(i: &str) -> IResult<&str, GetElementPtr> {
     let i = tag("getelementptr")(i)?.0;
@@ -194,7 +199,7 @@ fn getelementptr(i: &str) -> IResult<&str, GetElementPtr> {
         space1(i)
     })(i)?
     .0;
-    let i = delimited(
+    let (i, name) = delimited(
         char('('),
         |i| {
             let i = type_(i)?.0;
@@ -202,19 +207,20 @@ fn getelementptr(i: &str) -> IResult<&str, GetElementPtr> {
             let i = space1(i)?.0;
             let i = type_(i)?.0;
             let i = space1(i)?.0;
-            let i = global(i)?.0;
-            many1(|i| {
+            let (i, name) = global(i)?;
+            let i = many1(|i| {
                 let i = char(',')(i)?.0;
                 let i = space1(i)?.0;
                 let i = type_(i)?.0;
                 let i = space1(i)?.0;
                 digit1(i)
-            })(i)
+            })(i)?
+            .0;
+            Ok((i, name))
         },
         char(')'),
-    )(i)?
-    .0;
-    Ok((i, GetElementPtr))
+    )(i)?;
+    Ok((i, GetElementPtr(name.0)))
 }
 
 fn name(i: &str) -> IResult<&str, &str> {
@@ -276,6 +282,11 @@ mod tests {
     }
 
     #[test]
+    fn bitcast() {
+        super::bitcast("bitcast (i8* getelementptr inbounds (<{ [228 x i8] }>, <{ [228 x i8] }>* @_ZN17at28c_rs_firmware3APP7usb_dev17h0475a05cee83d665E, i32 0, i32 0, i32 44) to i32*)").unwrap();
+    }
+
+    #[test]
     fn comment() {
         assert_eq!(
             super::comment("; core::ptr::real_drop_in_place"),
@@ -292,7 +303,7 @@ mod tests {
     fn getelementptr() {
         assert_eq!(
             super::getelementptr("getelementptr inbounds (<{ [0 x i8] }>, <{ [0 x i8] }>* @anon.3751ff68b49c735a867036886cf6a576.71, i32 0, i32 0)"),
-            Ok(("", GetElementPtr)),
+            Ok(("", GetElementPtr(Some("anon.3751ff68b49c735a867036886cf6a576.71")))),
         );
     }
 
