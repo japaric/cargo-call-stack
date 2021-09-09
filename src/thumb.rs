@@ -14,14 +14,14 @@ pub fn analyze(
             panic!(
                 "BUG: unknown instruction {:02x}{:02x}",
                 $first[1], $first[0]
-            );
+            )
         };
 
         ($first:expr, $second:expr) => {
             panic!(
                 "BUG: unknown instruction {:02x}{:02x} {:02x}{:02x}",
                 $first[1], $first[0], $second[1], $second[0]
-            );
+            )
         };
     }
 
