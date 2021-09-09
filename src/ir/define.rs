@@ -678,5 +678,22 @@ mod tests {
                 }
             ))
         );
+
+        assert_eq!(
+            super::parse(include_str!("define/parse6.ll").trim()),
+            Ok((
+                "",
+                Define {
+                    name: "_defmt_acquire",
+                    stmts: vec![Stmt::Other],
+                    sig: FnSig {
+                        inputs: vec![Type::Pointer(Box::new(Type::Alias(
+                            "core::option::Option<defmt::InternalFormatter>"
+                        )))],
+                        output: None,
+                    },
+                }
+            ))
+        );
     }
 }

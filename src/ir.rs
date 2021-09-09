@@ -126,9 +126,15 @@ fn attribute(i: &str) -> IResult<&str, Attribute> {
     let (i, attr) = take_while1(|c: char| c.is_alphabetic() || c == '_')(i)?;
 
     let i = match attr {
-        "dereferenceable" | "dereferenceable_or_null" => {
+        "dereferenceable" | "dereferenceable_or_null" | "alignstack" => {
             let i = char('(')(i)?.0;
             let i = digit1(i)?.0;
+            char(')')(i)?.0
+        }
+
+        "sret" | "preallocated" | "inalloca" | "elementtype" | "byval" | "byref" => {
+            let i = char('(')(i)?.0;
+            let i = type_(i)?.0;
             char(')')(i)?.0
         }
 
