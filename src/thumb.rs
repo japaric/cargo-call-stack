@@ -544,6 +544,23 @@ pub fn analyze(
                 imm32 += 2 * i + 4;
 
                 bls.push(imm32);
+            } else if matches(first, "0b11111_0000100_xxxx")
+                && matches(second, "0bxxxx_1x01_xxxxxxxx")
+            {
+                // A7.7.158  STR - T4
+                // (writeback, post/pre-increment, subtract immediate)
+
+                let rn = first[0] & 0b1111;
+                if rn == SP {
+                    modifies_sp = true;
+
+                    let imm8 = second[0] & 0b1111_1111;
+                    let imm32 = u32::from(imm8);
+
+                    if let Some(stack) = stack.as_mut() {
+                        *stack += u64::from(imm32);
+                    }
+                }
             } else {
                 // some other 32-bit instruction
                 continue;
@@ -669,5 +686,10 @@ mod tests {
         let subw = super::analyze(&[0xad, 0xf5, 0x02, 0x7d], 0, true, &[]);
         assert!(subw.3);
         assert_eq!(subw.4, Some(520));
+
+        // f84d bd04       str     r11, [sp, #-4]!
+        let str = super::analyze(&[0x4d, 0xf8, 0x04, 0xbd], 0, true, &[]);
+        assert!(str.3);
+        assert_eq!(str.4, Some(4));
     }
 }
