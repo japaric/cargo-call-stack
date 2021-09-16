@@ -20,6 +20,7 @@ use ar::Archive;
 use cargo_project::{Artifact, Profile, Project};
 use clap::{crate_authors, crate_version, App, Arg};
 use env_logger::{Builder, Env};
+use failure::format_err;
 use filetime::FileTime;
 use log::{error, warn};
 use petgraph::{
@@ -211,7 +212,8 @@ fn run() -> Result<i32, failure::Error> {
         project.path(Artifact::Bin(file), profile, target_flag, &host)?
     };
 
-    let elf = fs::read(&path)?;
+    let elf = fs::read(&path)
+        .map_err(|e| format_err!("couldn't open ELF file `{}`: {}", path.display(), e))?;
 
     // load llvm-ir file
     let mut ll = None;
@@ -252,8 +254,10 @@ fn run() -> Result<i32, failure::Error> {
 
     let ll = ll.expect("unreachable");
     let obj = ll.with_extension("o");
-    let ll = fs::read_to_string(ll)?;
-    let obj = fs::read(obj)?;
+    let ll = fs::read_to_string(&ll)
+        .map_err(|e| format_err!("couldn't read LLVM IR from `{}`: {}", ll.display(), e))?;
+    let obj = fs::read(&obj)
+        .map_err(|e| format_err!("couldn't read object file `{}`: {}", obj.display(), e))?;
 
     let items = crate::ir::parse(&ll)?;
     let mut defines = HashMap::new();
@@ -300,7 +304,9 @@ fn run() -> Result<i32, failure::Error> {
     let sysroot = Path::new(sysroot_nl.trim_end());
     let libdir = sysroot.join("lib/rustlib").join(target).join("lib");
 
-    for entry in fs::read_dir(libdir)? {
+    for entry in fs::read_dir(&libdir)
+        .map_err(|e| format_err!("couldn't read `{}`: {}", libdir.display(), e))?
+    {
         let entry = entry?;
         let path = entry.path();
 
@@ -311,7 +317,10 @@ fn run() -> Result<i32, failure::Error> {
                 .map(|stem| stem.starts_with("libcompiler_builtins"))
                 .unwrap_or(false)
         {
-            let mut ar = Archive::new(File::open(path)?);
+            let mut ar = Archive::new(
+                File::open(&path)
+                    .map_err(|e| format_err!("couldn't open `{}`: {}", path.display(), e))?,
+            );
 
             let mut buf = vec![];
             while let Some(entry) = ar.next_entry() {
