@@ -10,9 +10,9 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     env,
     fs::{self, File},
-    io::{self, Read, Write},
-    path::{Path, PathBuf},
-    process::{self, Command},
+    io::{self, BufRead, BufReader, Read, Write},
+    path::PathBuf,
+    process::{self, Command, Stdio},
     time::SystemTime,
 };
 
@@ -53,11 +53,45 @@ fn main() -> Result<(), failure::Error> {
 // Font used in the dot graphs
 const FONT: &str = "monospace";
 
-// Version we analyzed to extract some ad-hoc information
-const VERS: &str = "1.33.0"; // compiler-builtins = "0.1.4"
+const COMPILER_BUILTINS_PATH_MARKER: &str = "@CARGO_CALL_STACK:compiler_builtins@";
+
+fn wrapper() -> Result<i32, failure::Error> {
+    let mut args = env::args_os().skip(1);
+    let rustc_path = args.next().unwrap();
+
+    let rustc_args = args.collect::<Vec<_>>();
+
+    // Extract path to the custom-built `compiler_builtins`.
+    for pair in rustc_args.windows(2) {
+        match pair {
+            [ext, spec] => {
+                if ext == "--extern" {
+                    let spec = spec.to_str().expect("non UTF-8 argument");
+                    let spec = spec.trim_start_matches("noprelude:");
+                    let mut split = spec.splitn(2, '=');
+                    if let (Some("compiler_builtins"), Some(path)) = (split.next(), split.next()) {
+                        eprintln!("{}{}", COMPILER_BUILTINS_PATH_MARKER, path);
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    let mut rustc = Command::new(&rustc_path);
+    rustc.arg("-Zemit-stack-sizes").args(&rustc_args);
+    let status = rustc
+        .status()
+        .map_err(|e| format_err!("failed to spawn `{}`: {}", rustc_path.to_string_lossy(), e))?;
+    Ok(status.code().unwrap_or(-1))
+}
 
 #[allow(deprecated)]
 fn run() -> Result<i32, failure::Error> {
+    if env::var_os("CARGO_CALL_STACK_RUSTC_WRAPPER").is_some() {
+        return wrapper();
+    }
+
     Builder::from_env(Env::default().default_filter_or("warn")).init();
 
     let matches = App::new("cargo-call-stack")
@@ -156,6 +190,8 @@ fn run() -> Result<i32, failure::Error> {
     }
 
     cargo.args(&[
+        "-Zbuild-std",
+        "--color=always",
         "--",
         // .ll file
         "--emit=llvm-ir,obj",
@@ -164,10 +200,11 @@ fn run() -> Result<i32, failure::Error> {
         "embed-bitcode=yes",
         "-C",
         "lto=fat",
-        // stack size information
-        "-Z",
-        "emit-stack-sizes",
     ]);
+
+    cargo.env("CARGO_CALL_STACK_RUSTC_WRAPPER", "1");
+    cargo.env("RUSTC_WRAPPER", env::current_exe()?);
+    cargo.stderr(Stdio::piped());
 
     let cwd = env::current_dir()?;
     let project = Project::query(cwd)?;
@@ -197,11 +234,27 @@ fn run() -> Result<i32, failure::Error> {
         eprintln!("{:?}", cargo);
     }
 
-    let status = cargo.status()?;
+    let mut child = cargo.spawn()?;
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut compiler_builtins_path = None;
+    for line in stderr.lines() {
+        let line = line?;
+        if line.starts_with(COMPILER_BUILTINS_PATH_MARKER) {
+            let path = line.trim_start_matches(COMPILER_BUILTINS_PATH_MARKER);
+            compiler_builtins_path = Some(path.to_string());
+        } else {
+            eprintln!("{}", line);
+        }
+    }
+
+    let status = child.wait()?;
 
     if !status.success() {
         return Ok(status.code().unwrap_or(1));
     }
+
+    let compiler_builtins_path =
+        compiler_builtins_path.expect("`compiler_builtins` was not linked");
 
     let meta = rustc_version::version_meta()?;
     let host = meta.host;
@@ -293,53 +346,27 @@ fn run() -> Result<i32, failure::Error> {
         .map(|(name, stack)| (name.to_owned(), stack))
         .collect();
 
-    // extract stack usage info from `libcompiler-builtins.rlib`
-    let sysroot_nl = String::from_utf8(
-        Command::new("rustc")
-            .args(&["--print", "sysroot"])
-            .output()?
-            .stdout,
-    )?;
-    // remove trailing newline
-    let sysroot = Path::new(sysroot_nl.trim_end());
-    let libdir = sysroot.join("lib/rustlib").join(target).join("lib");
+    let mut ar = Archive::new(
+        File::open(&compiler_builtins_path)
+            .map_err(|e| format_err!("couldn't open `{}`: {}", compiler_builtins_path, e))?,
+    );
 
-    for entry in fs::read_dir(&libdir)
-        .map_err(|e| format_err!("couldn't read `{}`: {}", libdir.display(), e))?
-    {
-        let entry = entry?;
-        let path = entry.path();
+    let mut buf = vec![];
+    while let Some(entry) = ar.next_entry() {
+        let mut entry = entry?;
+        let header = entry.header();
 
-        if path.extension().map(|ext| ext == "rlib").unwrap_or(false)
-            && path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .map(|stem| stem.starts_with("libcompiler_builtins"))
-                .unwrap_or(false)
+        if str::from_utf8(header.identifier())
+            .map(|id| id.contains("compiler_builtins") && id.ends_with(".o"))
+            .unwrap_or(false)
         {
-            let mut ar = Archive::new(
-                File::open(&path)
-                    .map_err(|e| format_err!("couldn't open `{}`: {}", path.display(), e))?,
+            buf.clear();
+            entry.read_to_end(&mut buf)?;
+            stack_sizes.extend(
+                stack_sizes::analyze_object(&buf)?
+                    .into_iter()
+                    .map(|(name, stack)| (name.to_owned(), stack)),
             );
-
-            let mut buf = vec![];
-            while let Some(entry) = ar.next_entry() {
-                let mut entry = entry?;
-                let header = entry.header();
-
-                if str::from_utf8(header.identifier())
-                    .map(|id| id.contains("compiler_builtins") && id.ends_with(".o"))
-                    .unwrap_or(false)
-                {
-                    buf.clear();
-                    entry.read_to_end(&mut buf)?;
-                    stack_sizes.extend(
-                        stack_sizes::analyze_object(&buf)?
-                            .into_iter()
-                            .map(|(name, stack)| (name.to_owned(), stack)),
-                    );
-                }
-            }
         }
     }
 
@@ -442,99 +469,9 @@ fn run() -> Result<i32, failure::Error> {
         let _out = addr2name.insert(address, canonical_name);
         debug_assert!(_out.is_none());
 
-        let mut stack = stack_sizes.get(canonical_name).cloned();
+        let stack = stack_sizes.get(canonical_name).cloned();
         if stack.is_none() {
-            // here we inject some target specific information we got from analyzing
-            // `libcompiler_builtins.rlib`
-
-            let ad_hoc = match target {
-                "thumbv6m-none-eabi" => match canonical_name {
-                    "__aeabi_memcpy" | "__aeabi_memset" | "__aeabi_memclr" | "__aeabi_memclr4"
-                    | "__aeabi_f2uiz" => {
-                        stack = Some(0);
-                        true
-                    }
-
-                    "__aeabi_memcpy4" | "__aeabi_memset4" | "__aeabi_f2iz" | "__aeabi_fadd"
-                    | "__aeabi_fdiv" | "__aeabi_fmul" | "__aeabi_fsub" => {
-                        stack = Some(8);
-                        true
-                    }
-
-                    "memcmp" | "__aeabi_fcmpgt" | "__aeabi_fcmplt" | "__aeabi_i2f"
-                    | "__aeabi_ui2f" => {
-                        stack = Some(16);
-                        true
-                    }
-
-                    "__addsf3" => {
-                        stack = Some(32);
-                        true
-                    }
-
-                    "__divsf3" => {
-                        stack = Some(40);
-                        true
-                    }
-
-                    "__mulsf3" => {
-                        stack = Some(48);
-                        true
-                    }
-
-                    _ => false,
-                },
-
-                "thumbv7m-none-eabi" | "thumbv7em-none-eabi" | "thumbv7em-none-eabihf" => {
-                    match canonical_name {
-                        "__aeabi_memclr" | "__aeabi_memclr4" => {
-                            stack = Some(0);
-                            true
-                        }
-
-                        "__aeabi_memcpy" | "__aeabi_memcpy4" | "memcmp" => {
-                            stack = Some(16);
-                            true
-                        }
-
-                        "__aeabi_memset" | "__aeabi_memset4" => {
-                            stack = Some(8);
-                            true
-                        }
-
-                        // ARMv7-M only below this point
-                        "__aeabi_f2iz" | "__aeabi_f2uiz" | "__aeabi_fadd" | "__aeabi_fcmpgt"
-                        | "__aeabi_fcmplt" | "__aeabi_fdiv" | "__aeabi_fmul" | "__aeabi_fsub"
-                        | "__aeabi_i2f" | "__aeabi_ui2f"
-                            if target == "thumbv7m-none-eabi" =>
-                        {
-                            stack = Some(0);
-                            true
-                        }
-
-                        "__addsf3" | "__mulsf3" if target == "thumbv7m-none-eabi" => {
-                            stack = Some(16);
-                            true
-                        }
-
-                        "__divsf3" if target == "thumbv7m-none-eabi" => {
-                            stack = Some(20);
-                            true
-                        }
-
-                        _ => false,
-                    }
-                }
-
-                _ => false,
-            };
-
-            if ad_hoc {
-                warn!(
-                    "ad-hoc: injecting stack usage information for `{}` (last checked: Rust {})",
-                    canonical_name, VERS
-                );
-            } else if !target_.is_thumb() {
+            if !target_.is_thumb() {
                 warn!("no stack usage information for `{}`", canonical_name);
             }
         } else {
