@@ -1013,7 +1013,7 @@ fn run() -> Result<i32, failure::Error> {
                                 *llvm_stack, stack,
                                 "BUG: LLVM reported that `{}` uses {} bytes of stack but \
                                  this doesn't match our analysis",
-                                canonical_name, stack
+                                canonical_name, llvm_stack
                             );
                         }
                     }
