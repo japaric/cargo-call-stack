@@ -621,6 +621,19 @@ fn run() -> Result<i32, failure::Error> {
                     indirects.entry(sig).or_default().callees.insert(idx);
                 }
 
+                "memcpy" => {
+                    // `fn(*mut u8, *const u8, usize) -> *mut u8`
+                    let sig = FnSig {
+                        inputs: vec![
+                            Type::Pointer(Box::new(Type::Integer(8))),
+                            Type::Pointer(Box::new(Type::Integer(8))),
+                            Type::Integer(32), // ARM has 32-bit pointers
+                        ],
+                        output: Some(Box::new(Type::Pointer(Box::new(Type::Integer(8))))),
+                    };
+                    indirects.entry(sig).or_default().callees.insert(idx);
+                }
+
                 "__aeabi_memclr" | "__aeabi_memclr4" | "__aeabi_memclr8" => {
                     // `fn(*mut u8, usize)`
                     let sig = FnSig {
