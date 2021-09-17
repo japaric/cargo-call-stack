@@ -37,12 +37,7 @@ jobs:
           toolchain: nightly
       - run: cargo install --path . --debug
       - name: Can analyze example firmware
-        working-directory: cortex-m-examples
-        run: |
-          cargo call-stack --target $FW_TARGET --example cycle
-          cargo call-stack --target $FW_TARGET --example fmul
-          cargo call-stack --target $FW_TARGET --example fn
-          cargo call-stack --target $FW_TARGET --example to
+        run: cargo test
 
   # Refs: https://github.com/rust-lang/crater/blob/9ab6f9697c901c4a44025cf0a39b73ad5b37d198/.github/workflows/bors.yml#L125-L149
   # bors.tech integration
