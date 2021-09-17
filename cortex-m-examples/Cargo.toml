@@ -9,8 +9,19 @@ version = "0.1.0"
 cortex-m = "0.5.8"
 cortex-m-rt = "0.6.5"
 cortex-m-semihosting = "0.3.2"
+defmt = "0.2.3"
 panic-halt = "0.2.0"
 spin = "0.5.0"
+defmt-rtt = "0.2.0"
+
+[features]
+default = ["defmt-default"]
+defmt-default = []
+defmt-error = []
+defmt-warn = []
+defmt-info = []
+defmt-debug = []
+defmt-trace = []
 
 [profile.release]
 codegen-units = 1
