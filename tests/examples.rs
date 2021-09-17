@@ -182,7 +182,7 @@ fn fmt() {
 }
 
 #[test]
-fn fmt() {
+fn panic_fmt() {
     if channel_is_nightly() {
         let _should_not_error = call_stack("panic-fmt");
     }
