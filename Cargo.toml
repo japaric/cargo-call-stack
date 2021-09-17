@@ -15,7 +15,7 @@ version = "0.1.5"
 
 [dependencies]
 ar = "0.6.2"
-cargo-project = "0.2.2"
+cargo-project = "0.2.5"
 clap = "2.33.0"
 env_logger = "0.6.0"
 failure = "0.1.6"
