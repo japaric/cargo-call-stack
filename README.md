@@ -47,6 +47,8 @@ working with a nightly toolchain at any time. You have been warned!
 ``` console
 $ # NOTE always use the latest stable release
 $ cargo +stable install cargo-call-stack
+
+$ rustup +nightly component add rust-src
 ```
 
 ## Example usage
