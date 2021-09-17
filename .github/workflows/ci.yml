@@ -8,7 +8,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  FW_TARGET: thumbv7m-none-eabi
 
 jobs:
   host-test:
@@ -24,6 +23,8 @@ jobs:
         run: cargo test
 
   firmware-test:
+    env:
+      FW_TARGET: thumbv7m-none-eabi
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
