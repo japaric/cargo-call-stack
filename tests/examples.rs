@@ -163,18 +163,49 @@ fn to() {
     }
 }
 
+#[test]
+fn defmt() {
+    if channel_is_nightly() {
+        let dot = call_stack("defmt");
+        assert!(
+            dot.contains(&"label=\"Reset\\nmax = "),
+            "could not compute an upper for entry point"
+        );
+    }
+}
+
+#[test]
+fn fmt() {
+    if channel_is_nightly() {
+        let _should_not_error = call_stack("fmt");
+    }
+}
+
+#[test]
+fn panic_fmt() {
+    if channel_is_nightly() {
+        let _should_not_error = call_stack("panic-fmt");
+    }
+}
+
 fn channel_is_nightly() -> bool {
     rustc_version::version_meta().map(|m| m.channel).ok() == Some(Channel::Nightly)
 }
 
 fn call_stack(ex: &str) -> String {
-    String::from_utf8(
-        Command::new("cargo")
-            .args(&["call-stack", "--example", ex])
-            .current_dir(env::current_dir().unwrap().join("cortex-m-examples"))
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap()
+    let output = Command::new("cargo")
+        .args(&[
+            "call-stack",
+            "--target",
+            "thumbv7m-none-eabi",
+            "--example",
+            ex,
+        ])
+        .current_dir(env::current_dir().unwrap().join("cortex-m-examples"))
+        .output()
+        .unwrap();
+    if !output.status.success() {
+        panic!("{}", String::from_utf8(output.stderr).unwrap());
+    }
+    String::from_utf8(output.stdout).unwrap()
 }

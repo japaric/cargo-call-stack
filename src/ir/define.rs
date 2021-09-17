@@ -310,17 +310,18 @@ mod tests {
             ))
         );
 
-        assert_eq!(
-            super::argument(
-                r#"%"core::result::Result<(), io::error::Error>"* noalias nocapture nonnull sret dereferenceable(16) %26"#
-            ),
-            Ok((
-                "",
-                Argument(Type::Pointer(Box::new(Type::Alias(
-                    "core::result::Result<(), io::error::Error>"
-                ))))
-            ))
-        );
+        // not seen in practice in a while; `sret(%"SomeType")` does appear in practice
+        // assert_eq!(
+        //     super::argument(
+        //         r#"%"core::result::Result<(), io::error::Error>"* noalias nocapture nonnull sret dereferenceable(16) %26"#
+        //     ),
+        //     Ok((
+        //         "",
+        //         Argument(Type::Pointer(Box::new(Type::Alias(
+        //             "core::result::Result<(), io::error::Error>"
+        //         ))))
+        //     ))
+        // );
 
         assert_eq!(
             super::argument(r#"{}* nonnull align 1 %723"#),

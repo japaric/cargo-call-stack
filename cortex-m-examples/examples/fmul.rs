@@ -5,7 +5,7 @@ extern crate panic_halt;
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use cortex_m_rt::{entry, exception};
+use cortex_m_rt::exception;
 
 static X: AtomicU32 = AtomicU32::new(0);
 
