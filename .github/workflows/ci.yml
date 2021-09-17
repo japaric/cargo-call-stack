@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main, staging, trying]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  FW_TARGET: thumbv7m-none-eabi
+
+jobs:
+  host-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          override: true
+          profile: minimal
+          toolchain: stable
+      - name: Run disassembler test suite
+        run: cargo test
+
+  firmware-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          override: true
+          profile: minimal
+          target: thumbv7m-none-eabi
+          toolchain: nightly
+      - run: cargo install --path . --debug
+      - name: Can analyze example firmware
+        working-directory: cortex-m-examples
+        run: |
+          cargo call-stack --target $FW_TARGET --example cycle
+          cargo call-stack --target $FW_TARGET --example fmul
+          cargo call-stack --target $FW_TARGET --example fn
+          cargo call-stack --target $FW_TARGET --example to
+
+  # Refs: https://github.com/rust-lang/crater/blob/9ab6f9697c901c4a44025cf0a39b73ad5b37d198/.github/workflows/bors.yml#L125-L149
+  # bors.tech integration
+  ci-success:
+    name: ci
+    if: ${{ success() }}
+    needs:
+      - host-test
+      - firmware-test
+    runs-on: ubuntu-20.04
+    steps:
+      - name: CI succeeded
+        run: exit 0
