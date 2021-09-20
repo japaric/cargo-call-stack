@@ -136,7 +136,7 @@ fn asm(i: &str) -> IResult<&str, Stmt> {
     let i = tag("asm")(i)?.0;
     let i = space1(i)?.0;
     let i = many0(|i| {
-        let i = super::attribute(i)?.0;
+        let i = super::ident(i)?.0;
         space1(i)
     })(i)?
     .0;
@@ -691,6 +691,21 @@ mod tests {
                         inputs: vec![Type::Pointer(Box::new(Type::Alias(
                             "core::option::Option<defmt::InternalFormatter>"
                         )))],
+                        output: None,
+                    },
+                }
+            ))
+        );
+
+        assert_eq!(
+            super::parse(include_str!("define/parse7.ll").trim()),
+            Ok((
+                "",
+                Define {
+                    name: "__aeabi_uidivmod",
+                    stmts: vec![Stmt::Label, Stmt::Asm("push {lr}"), Stmt::Other],
+                    sig: FnSig {
+                        inputs: vec![],
                         output: None,
                     },
                 }
