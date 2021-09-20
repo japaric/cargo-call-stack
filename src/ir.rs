@@ -53,8 +53,20 @@ impl<'a> fmt::Display for FnSig<'a> {
 
 pub fn parse(ll: &str) -> Result<Vec<Item>, failure::Error> {
     items(ll).map(|t| t.1).map_err(|e| {
+        let e = e.map(|(rest, kind)| {
+            let offset = ll.len()-rest.len();
+            let mut cur = offset;
+            for (n, line) in ll.split_inclusive('\n').enumerate() {
+                match cur.checked_sub(line.len()) {
+                    Some(it) => cur = it,
+                    None => return format!("{:?} in line {}", kind, n + 1),
+                }
+            }
+
+            unreachable!("couldn't find line the parse error at offset {} refers to", offset)
+        });
         failure::format_err!(
-            "BUG: failed to parse .ll file; please submit a bug report with Rust source code. Details (include the _first_ LLVM item, e.g. `define .. {{ .. }}`, in the report):\n{:?}",
+            "BUG: failed to parse LLVM IR; please submit a cargo-call-stack bug report and attach the `.ll` file: {:?}",
             e
         )
     })
