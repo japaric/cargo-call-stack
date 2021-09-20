@@ -39,6 +39,7 @@ use crate::{
 
 mod ir;
 mod thumb;
+mod wrapper;
 
 fn main() -> Result<(), failure::Error> {
     match run() {
@@ -53,43 +54,10 @@ fn main() -> Result<(), failure::Error> {
 // Font used in the dot graphs
 const FONT: &str = "monospace";
 
-const COMPILER_BUILTINS_PATH_MARKER: &str = "@CARGO_CALL_STACK:compiler_builtins@";
-
-fn wrapper() -> Result<i32, failure::Error> {
-    let mut args = env::args_os().skip(1);
-    let rustc_path = args.next().unwrap();
-
-    let rustc_args = args.collect::<Vec<_>>();
-
-    // Extract path to the custom-built `compiler_builtins`.
-    for pair in rustc_args.windows(2) {
-        match pair {
-            [ext, spec] => {
-                if ext == "--extern" {
-                    let spec = spec.to_str().expect("non UTF-8 argument");
-                    let spec = spec.trim_start_matches("noprelude:");
-                    let mut split = spec.splitn(2, '=');
-                    if let (Some("compiler_builtins"), Some(path)) = (split.next(), split.next()) {
-                        eprintln!("{}{}", COMPILER_BUILTINS_PATH_MARKER, path);
-                    }
-                }
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    let mut rustc = Command::new(&rustc_path);
-    rustc.arg("-Zemit-stack-sizes").args(&rustc_args);
-    let status = rustc
-        .status()
-        .map_err(|e| format_err!("failed to spawn `{}`: {}", rustc_path.to_string_lossy(), e))?;
-    Ok(status.code().unwrap_or(-1))
-}
-
 #[allow(deprecated)]
 fn run() -> Result<i32, failure::Error> {
     if env::var_os("CARGO_CALL_STACK_RUSTC_WRAPPER").is_some() {
-        return wrapper();
+        return wrapper::wrapper();
     }
 
     Builder::from_env(Env::default().default_filter_or("warn")).init();
@@ -236,12 +204,16 @@ fn run() -> Result<i32, failure::Error> {
 
     let mut child = cargo.spawn()?;
     let stderr = BufReader::new(child.stderr.take().unwrap());
-    let mut compiler_builtins_path = None;
+    let mut compiler_builtins_rlib_path = None;
+    let mut compiler_builtins_ll_path = None;
     for line in stderr.lines() {
         let line = line?;
-        if line.starts_with(COMPILER_BUILTINS_PATH_MARKER) {
-            let path = line.trim_start_matches(COMPILER_BUILTINS_PATH_MARKER);
-            compiler_builtins_path = Some(path.to_string());
+        if line.starts_with(wrapper::COMPILER_BUILTINS_RLIB_PATH_MARKER) {
+            let path = &line[wrapper::COMPILER_BUILTINS_RLIB_PATH_MARKER.len()..];
+            compiler_builtins_rlib_path = Some(path.to_string());
+        } else if line.starts_with(wrapper::COMPILER_BUILTINS_LL_PATH_MARKER) {
+            let path = &line[wrapper::COMPILER_BUILTINS_LL_PATH_MARKER.len()..];
+            compiler_builtins_ll_path = Some(path.to_string());
         } else {
             eprintln!("{}", line);
         }
@@ -253,8 +225,10 @@ fn run() -> Result<i32, failure::Error> {
         return Ok(status.code().unwrap_or(1));
     }
 
-    let compiler_builtins_path =
-        compiler_builtins_path.expect("`compiler_builtins` was not linked");
+    let compiler_builtins_rlib_path =
+        compiler_builtins_rlib_path.expect("`compiler_builtins` was not linked");
+    let compiler_builtins_ll_path =
+        compiler_builtins_ll_path.expect("`compiler_builtins` LLVM IR unavailable");
 
     let meta = rustc_version::version_meta()?;
     let host = meta.host;
@@ -305,17 +279,38 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
-    let ll = ll.expect("unreachable");
-    let obj = ll.with_extension("o");
-    let ll = fs::read_to_string(&ll)
-        .map_err(|e| format_err!("couldn't read LLVM IR from `{}`: {}", ll.display(), e))?;
+    let ll_path = ll.expect("unreachable");
+    let obj = ll_path.with_extension("o");
+    let ll = fs::read_to_string(&ll_path)
+        .map_err(|e| format_err!("couldn't read LLVM IR from `{}`: {}", ll_path.display(), e))?;
     let obj = fs::read(&obj)
         .map_err(|e| format_err!("couldn't read object file `{}`: {}", obj.display(), e))?;
 
-    let items = crate::ir::parse(&ll)?;
+    let compiler_builtins_ll = fs::read_to_string(&compiler_builtins_ll_path).map_err(|e| {
+        format_err!(
+            "couldn't read `compiler_builtins` LLVM IR from `{}`: {}",
+            compiler_builtins_ll_path,
+            e
+        )
+    })?;
+
+    let items = crate::ir::parse(&ll).map_err(|e| {
+        format_err!(
+            "failed to parse application's LLVM IR from `{}`: {}",
+            ll_path.display(),
+            e
+        )
+    })?;
+    let compiler_builtins_items = crate::ir::parse(&compiler_builtins_ll).map_err(|e| {
+        format_err!(
+            "failed to parse `compiler_builtins` LLVM IR from `{}`: {}",
+            compiler_builtins_ll_path,
+            e
+        )
+    })?;
     let mut defines = HashMap::new();
     let mut declares = HashMap::new();
-    for item in items {
+    for item in items.into_iter().chain(compiler_builtins_items) {
         match item {
             Item::Define(def) => {
                 defines.insert(def.name, def);
@@ -347,8 +342,8 @@ fn run() -> Result<i32, failure::Error> {
         .collect();
 
     let mut ar = Archive::new(
-        File::open(&compiler_builtins_path)
-            .map_err(|e| format_err!("couldn't open `{}`: {}", compiler_builtins_path, e))?,
+        File::open(&compiler_builtins_rlib_path)
+            .map_err(|e| format_err!("couldn't open `{}`: {}", compiler_builtins_rlib_path, e))?,
     );
 
     let mut buf = vec![];
@@ -543,120 +538,8 @@ fn run() -> Result<i32, failure::Error> {
 
             indirects.entry(sig).or_default().callees.insert(idx);
         } else {
-            // from `compiler-builtins`
-            match canonical_name {
-                "__aeabi_memcpy" | "__aeabi_memcpy4" | "__aeabi_memcpy8" => {
-                    // `fn(*mut u8, *const u8, usize)`
-                    let sig = FnSig {
-                        inputs: vec![
-                            Type::Pointer(Box::new(Type::Integer(8))),
-                            Type::Pointer(Box::new(Type::Integer(8))),
-                            Type::Integer(32), // ARM has 32-bit pointers
-                        ],
-                        output: None,
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
-
-                "memcpy" => {
-                    // `fn(*mut u8, *const u8, usize) -> *mut u8`
-                    let sig = FnSig {
-                        inputs: vec![
-                            Type::Pointer(Box::new(Type::Integer(8))),
-                            Type::Pointer(Box::new(Type::Integer(8))),
-                            Type::Integer(32), // ARM has 32-bit pointers
-                        ],
-                        output: Some(Box::new(Type::Pointer(Box::new(Type::Integer(8))))),
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
-
-                "__aeabi_memclr" | "__aeabi_memclr4" | "__aeabi_memclr8" => {
-                    // `fn(*mut u8, usize)`
-                    let sig = FnSig {
-                        inputs: vec![
-                            Type::Pointer(Box::new(Type::Integer(8))),
-                            Type::Integer(32), // ARM has 32-bit pointers
-                        ],
-                        output: None,
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
-
-                "__aeabi_memset" | "__aeabi_memset4" | "__aeabi_memset8" => {
-                    // `fn(*mut u8, usize, i32)`
-                    let sig = FnSig {
-                        inputs: vec![
-                            Type::Pointer(Box::new(Type::Integer(8))),
-                            Type::Integer(32), // ARM has 32-bit pointers
-                            Type::Integer(32),
-                        ],
-                        output: None,
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
-
-                "__aeabi_fadd" | "__addsf3" | "__aeabi_fsub" | "__subsf3" | "__aeabi_fdiv"
-                | "__divsf3" | "__aeabi_fmul" | "__mulsf3" => {
-                    // `fn(f32, f32) -> f32`
-                    let sig = FnSig {
-                        inputs: vec![Type::Float, Type::Float],
-                        output: Some(Box::new(Type::Float)),
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
-
-                "__aeabi_fcmpgt" | "__aeabi_fcmplt" => {
-                    // `fn(f32, f32) -> i32`
-                    let sig = FnSig {
-                        inputs: vec![Type::Float, Type::Float],
-                        output: Some(Box::new(Type::Integer(32))),
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
-
-                "__aeabi_f2uiz" | "__aeabi_f2iz" => {
-                    // `fn(f32) -> {i,u}32`
-                    let sig = FnSig {
-                        inputs: vec![Type::Float],
-                        output: Some(Box::new(Type::Integer(32))),
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
-
-                "__aeabi_ui2f" | "__aeabi_i2f" => {
-                    // `fn({i,u}32) -> f32`
-                    let sig = FnSig {
-                        inputs: vec![Type::Integer(32)],
-                        output: Some(Box::new(Type::Float)),
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
-
-                "__divmoddi4" | "__udivmoddi4" => {
-                    // `fn({i,u}64, {i,u}64, *{i,u}64) -> {i,u}64`
-                    let sig = FnSig {
-                        inputs: vec![
-                            Type::Integer(64),
-                            Type::Integer(64),
-                            Type::Pointer(Box::new(Type::Integer(64))),
-                        ],
-                        output: Some(Box::new(Type::Integer(64))),
-                    };
-                    indirects.entry(sig).or_default().callees.insert(idx);
-                }
-
-                "__aeabi_uldivmod" | "__aeabi_ldivmod" => {
-                    // these subroutines don't use a standard calling convention and are impossible
-                    // to call from Rust code (they can be called via `asm!` though). This case is
-                    // listed here to suppress the warning below
-                }
-
-                _ => {
-                    has_untyped_symbols = true;
-                    warn!("no type information for `{}`", canonical_name);
-                }
-            }
+            has_untyped_symbols = true;
+            warn!("no type information for `{}`", canonical_name);
         }
     }
 
