@@ -41,6 +41,9 @@ pub enum Item<'a> {
 
     // `!0 = !DIGlobalVariableExpression(var: !1, expr: !DIExpression())`
     Metadata,
+
+    // `module asm "assembly snippet"`
+    ModuleAsm,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -187,6 +190,15 @@ fn metadata(i: &str) -> IResult<&str, Item> {
     Ok((i, Item::Metadata))
 }
 
+fn module_asm(i: &str) -> IResult<&str, Item> {
+    let i = tag("module")(i)?.0;
+    let i = space1(i)?.0;
+    let i = tag("asm")(i)?.0;
+    let i = space1(i)?.0;
+    let i = super::string(i)?.0;
+    Ok((i, Item::ModuleAsm))
+}
+
 pub fn item(i: &str) -> IResult<&str, Item> {
     alt((
         comment,
@@ -199,6 +211,7 @@ pub fn item(i: &str) -> IResult<&str, Item> {
         declare,
         attributes,
         metadata,
+        module_asm,
     ))(i)
 }
 
@@ -241,6 +254,15 @@ mod tests {
         assert_eq!(
             super::global("@DEVICE_PERIPHERALS = local_unnamed_addr global <{ [1 x i8] }> zeroinitializer, align 1, !dbg !175"),
             Ok(("", Item::Global))
+        );
+    }
+
+    #[test]
+    fn module_asm() {
+        assert_eq!(super::item(r#"module asm """#), Ok(("", Item::ModuleAsm)));
+        assert_eq!(
+            super::item(r#"module asm "            .section .llvmbc,\22e\22""#),
+            Ok(("", Item::ModuleAsm))
         );
     }
 
