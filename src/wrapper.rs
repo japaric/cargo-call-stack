@@ -1,3 +1,18 @@
+//! Implements a `rustc` wrapper that is used to inject additional arguments and extract sysroot
+//! information.
+//!
+//! This currently serves a few purposes:
+//! - Inject `-Zemit-stack-sizes` into *all* rustc invocations, even those for building the sysroot
+//!   (RUSTFLAGS does not affect those).
+//!   This is needed because we need stack usage information of functions in the `compiler_builtins`
+//!   library.
+//! - Extract the `compiler_builtins` rlib path from the rustc arguments passed by Cargo.
+//!   We need to know this path to extract the `.stack_sizes` section produced in the previous step.
+//! - Inject `--emit=llvm-ir` when compiling `compiler_builtins`, and reporting back the path to the
+//!   created `.ll` file.
+//!   This is needed because the `compiler_builtins` LLVM IR is not included in the final program,
+//!   even with `-C lto=fat` and `--emit=llvm-ir`.
+
 use std::{env, process::Command};
 
 use failure::format_err;
