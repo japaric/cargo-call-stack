@@ -188,6 +188,13 @@ fn panic_fmt() {
     }
 }
 
+#[test]
+fn div64() {
+    if channel_is_nightly() {
+        let _should_not_error = call_stack("div64");
+    }
+}
+
 fn channel_is_nightly() -> bool {
     rustc_version::version_meta().map(|m| m.channel).ok() == Some(Channel::Nightly)
 }
