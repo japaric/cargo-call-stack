@@ -544,28 +544,32 @@ fn run() -> Result<i32, failure::Error> {
     }
 
     // to avoid printing several warnings about the same thing
-    let mut asm_seen = HashSet::new();
+    let mut fns_containing_asm = HashSet::new();
     let mut llvm_seen = HashSet::new();
     // add edges
     let mut edges: HashMap<_, HashSet<_>> = HashMap::new(); // NodeIdx -> [NodeIdx]
     let mut defined = HashSet::new(); // functions that are `define`-d in the LLVM-IR
     for define in defines.values() {
-        let (caller, callees_seen) = if let Some(canonical_name) = aliases.get(&define.name) {
-            defined.insert(*canonical_name);
-
-            let idx = indices[*canonical_name];
-            (idx, edges.entry(idx).or_default())
-        } else {
-            // this symbol was GC-ed by the linker, skip
-            continue;
+        let canonical_name = match aliases.get(&define.name) {
+            Some(canonical_name) => canonical_name,
+            None => {
+                // this symbol was GC-ed by the linker, skip
+                continue;
+            }
         };
+        defined.insert(*canonical_name);
+        let caller = indices[*canonical_name];
+        let callees_seen = edges.entry(caller).or_default();
 
         for stmt in &define.stmts {
             match stmt {
                 Stmt::Asm(expr) => {
-                    if !asm_seen.contains(expr) {
-                        asm_seen.insert(expr);
-                        warn!("assuming that asm!(\"{}\") does *not* use the stack", expr);
+                    if fns_containing_asm.insert(*canonical_name) {
+                        // NB: we only print the first inline asm statement in a function
+                        warn!(
+                            "assuming that asm!(\"{}\") does *not* use the stack in `{}`",
+                            expr, canonical_name
+                        );
                     }
                 }
 
@@ -829,13 +833,15 @@ fn run() -> Result<i32, failure::Error> {
                 // also override LLVM's results when they appear to be wrong
                 if let Local::Exact(ref mut llvm_stack) = g[caller].local {
                     if let Some(stack) = our_stack {
-                        if *llvm_stack == 0 && stack != 0 {
-                            // this could be a `#[naked]` + `asm!` function or `global_asm!`
+                        if *llvm_stack != stack && fns_containing_asm.contains(&canonical_name) {
+                            // LLVM's stack usage analysis ignores inline asm, so its results can
+                            // be wrong here
 
                             warn!(
-                                "LLVM reported zero stack usage for `{}` but \
-                                 our analysis reported {} bytes; overriding LLVM's result",
-                                canonical_name, stack
+                                "LLVM reported that `{}` uses {} bytes of stack but \
+                                 our analysis reported {} bytes; overriding LLVM's result (function \
+                                 uses inline assembly)",
+                                canonical_name, llvm_stack, stack
                             );
 
                             *llvm_stack = stack;
