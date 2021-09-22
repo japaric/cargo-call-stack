@@ -579,28 +579,6 @@ LLVM, there are only signed integers. This leads the tool to wrongly add an edge
 between `i32 ()*` and `baz`. If the tool had Rust's type information then this
 edge would have not been added.
 
-### No information on compiler intrinsics
-
-Due to how LLVM works all compiler intrinsics, software implementations of
-functionality not available as instructions in the target ISA (e.g.
-multiplication of 64-bit integers), need to be a separate object file that gets
-linked into the final binary.
-
-In Rust all these compiler intrinsics are packed in the
-`libcompiler_builtins` rlib. This rlib is distributed via `rustup` and always
-compiled without `-Z emit-stack-sizes` so it contains no stack usage
-information. Furthermore, the metadata in the `compiler-builtins` crate is never
-accessed when compiling a crate so no LLVM-IR is ever produced from it thus the
-tool has no information about the call dependencies of the compiler intrinsics.
-
-All these unknowns are currently papered over in the tool using "ad hoc
-knowledge". For example, we now that `__aeabi_memclr4` invokes
-`__aeabi_memset4` and that `__aeabi_memset4` uses 8 bytes of stack on
-`thumbv7m-none-eabi` as of Rust 1.33.0 so the tool uses this information when
-building the call graph. Obviously, this approach doesn't scale and this ad hoc
-knowledge is likely to get outdated as compiler intrinsics are modified (to
-optimize them) over time.
-
 ### Miscellaneous
 
 The tool assumes that *all* instances of inline assembly (`asm!`) use zero bytes
