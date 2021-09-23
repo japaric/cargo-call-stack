@@ -13,6 +13,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Changed
 
+- bumped `cargo-project` dependency to support Cargo configuration files with the `.toml` file extension
 - the type information of functions defined in compiler-builtins is now extracted from LLVM IR (previously it was hardcoded)
 - the stack usage of functions defined in compiler-builtins now comes from LLVM (previously it was hardcoded)
 
