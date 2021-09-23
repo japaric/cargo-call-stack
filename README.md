@@ -59,10 +59,13 @@ options (e.g. `--features`).
 
 [`cortex-m-rt`]: https://crates.io/crates/cortex-m-rt
 
+> IMPORTANT: the analysis corresponds to the newly produced binary,
+> which won't be the same as the binary produced by `cargo +nightly build --release`
+
 ``` console
 $ cargo +nightly call-stack --example app > cg.dot
-warning: assuming that asm!("") does *not* use the stack
-warning: assuming that asm!("") does *not* use the stack
+warning: assuming that llvm_asm!("") does *not* use the stack
+warning: assuming that llvm_asm!("") does *not* use the stack
 ```
 
 Graphviz's `dot` can then be used to generate an image from this dot file.
@@ -85,7 +88,7 @@ all the other functions that the function could invoke.
 This is the `no_std` program used to generate the call graph shown above.
 
 ``` rust
-#![feature(asm)]
+#![feature(llvm_asm)]
 #![no_main]
 #![no_std]
 
@@ -107,12 +110,12 @@ fn main() -> ! {
 #[inline(never)]
 fn foo() {
     // spill variables onto the stack
-    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
+    unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
 }
 
 #[inline(never)]
 fn bar() {
-    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
+    unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
 }
 
 #[exception]
@@ -149,8 +152,8 @@ point we get this call graph:
 
 ``` console
 $ cargo +nightly call-stack --example app main > cg.dot
-warning: assuming that asm!("") does *not* use the stack
-warning: assuming that asm!("") does *not* use the stack
+warning: assuming that llvm_asm!("") does *not* use the stack
+warning: assuming that llvm_asm!("") does *not* use the stack
 ```
 
 <p align="center">
@@ -169,7 +172,7 @@ involve recursion. Recursion appears as cycles in the call graph. Consider the
 following example:
 
 ``` rust
-#![feature(asm)]
+#![feature(llvm_asm)]
 #![no_main]
 #![no_std]
 
@@ -216,7 +219,7 @@ fn baz() {
 #[inline(never)]
 fn quux() {
     // spill variables onto the stack
-    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
+    unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
 }
 
 #[exception]
@@ -350,7 +353,7 @@ trait objects -- more details about where and how it fails in the ["Known
 limitations"](#known-limitations) section. Here's an example:
 
 ``` rust
-#![feature(asm)]
+#![feature(llvm_asm)]
 #![no_main]
 #![no_std]
 
@@ -376,7 +379,7 @@ trait Foo {
     // default implementation of this method
     fn foo(&self) -> bool {
         // spill variables onto the stack
-        unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
+        unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
 
         false
     }
@@ -392,7 +395,7 @@ struct Baz;
 impl Foo for Baz {
     // overrides the default method
     fn foo(&self) -> bool {
-        unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
+        unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
 
         true
     }
@@ -404,8 +407,8 @@ impl Quux {
     // not a trait method!
     #[inline(never)]
     fn foo(&self) -> bool {
-        // NOTE(asm!) side effect to preserve function calls to this method
-        unsafe { asm!("NOP" : : : : "volatile") }
+        // NOTE(llvm_asm!) side effect to preserve function calls to this method
+        unsafe { llvm_asm!("NOP" : : : : "volatile") }
 
         false
     }
@@ -443,7 +446,7 @@ In *some* cases the tool can produce correct call graphs for programs that
 invoke functions via pointers (e.g. `fn()`). Here's an example:
 
 ``` rust
-#![feature(asm)]
+#![feature(llvm_asm)]
 #![no_main]
 #![no_std]
 
@@ -468,13 +471,13 @@ fn main() -> ! {
 
 fn foo() -> bool {
     // spill variables onto the stack
-    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
+    unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
 
     false
 }
 
 fn bar() -> bool {
-    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
+    unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
 
     true
 }
@@ -508,7 +511,7 @@ Rust's type information and leads to mislabeling of functions. For example,
 consider this program:
 
 ``` rust
-#![feature(asm)]
+#![feature(llvm_asm)]
 #![no_main]
 #![no_std]
 
@@ -548,7 +551,7 @@ fn SysTick() {
 
 fn foo() -> u32 {
     // spill variables onto the stack
-    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
+    unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
 
     0
 }
@@ -559,7 +562,7 @@ fn bar() -> u32 {
 
 #[inline(never)]
 fn baz() -> i32 {
-    unsafe { asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
+    unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
 
     F.load(Ordering::Relaxed) as usize as i32
 }
@@ -581,16 +584,14 @@ edge would have not been added.
 
 ### Miscellaneous
 
-The tool assumes that *all* instances of inline assembly (`asm!`) use zero bytes
-of stack. This is not always the case so the tool prints a warning message
-for each `asm!` string it encounters.
+Inline assembly breaks LLVM's stack usage analysis.
+LLVM does *not* consider inline assembly in its analysis and reports an incorrect number.
+In this case, `cargo-call-stack` will use its own stack usage analysis based on machine code, which only supports the ARM Cortex-M architecture.
 
-The tool assumes that branching (calling a function) does not use the stack
-(i.e. no register is pushed onto the stack when branching). This may not be true
-on *all* the architectures that Rust supports -- it is true on ARM Cortex-M.
+Hardware exceptions, like `SysTick` on Cortex-M devices, appear as disconnected nodes in the call graph.
+At the moment, `cargo-call-stack` cannot compute the whole program maximum stack usage when exceptions are present.
 
-The tool only supports ELF binaries because `-Z emit-stack-sizes` only supports
-the ELF format.
+The tool only supports ELF binaries because `-Z emit-stack-sizes` only supports the ELF format.
 
 ## License
 
