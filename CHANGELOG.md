@@ -5,6 +5,17 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.6] - 2021-09-23
+
+### Fixed
+
+- updated LLVM IR parser to recognize the output of newer toolchains
+
+### Changed
+
+- the type information of functions defined in compiler-builtins is now extracted from LLVM IR (previously it was hardcoded)
+- the stack usage of functions defined in compiler-builtins now comes from LLVM (previously it was hardcoded)
+
 ## [v0.1.5] - 2020-07-07
 
 ### Fixed
@@ -129,7 +140,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 Initial release
 
-[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.6...HEAD
+[v0.1.6]: https://github.com/japaric/cargo-call-stack/compare/v0.1.5...v0.1.6
 [v0.1.5]: https://github.com/japaric/cargo-call-stack/compare/v0.1.4...v0.1.5
 [v0.1.4]: https://github.com/japaric/cargo-call-stack/compare/v0.1.3...v0.1.4
 [v0.1.3]: https://github.com/japaric/cargo-call-stack/compare/v0.1.2...v0.1.3
