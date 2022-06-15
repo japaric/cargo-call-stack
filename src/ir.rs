@@ -242,7 +242,7 @@ fn getelementptr(i: &str) -> IResult<&str, GetElementPtr> {
 }
 
 fn name(i: &str) -> IResult<&str, &str> {
-    alt((map(string, |s| s.0), map(ident, |i| i.0)))(i)
+    alt((map(string, |s| s.0), map(ident, |i| i.0), digit1))(i)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

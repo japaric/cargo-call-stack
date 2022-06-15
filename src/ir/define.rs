@@ -161,6 +161,7 @@ fn argument(i: &str) -> IResult<&str, Argument> {
         map(super::bitcast, drop),
         map(super::getelementptr, drop),
         map(super::local, drop),
+        map(super::function, drop),
         map(digit1, drop),
     ))(i)?
     .0;
