@@ -1,10 +1,12 @@
-#![feature(llvm_asm)]
 #![no_main]
 #![no_std]
 
 extern crate panic_halt;
 
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::{
+    arch::asm,
+    sync::atomic::{AtomicPtr, Ordering},
+};
 
 use cortex_m_rt::{entry, exception};
 
@@ -23,13 +25,23 @@ fn main() -> ! {
 
 fn foo() -> bool {
     // spill variables onto the stack
-    unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
+    unsafe {
+        asm!(
+            "// {0} {1} {2} {3} {4} {5}",
+            in(reg) 0, in(reg) 1, in(reg) 2, in(reg) 3, in(reg) 4, in(reg) 5,
+        );
+    }
 
     false
 }
 
 fn bar() -> bool {
-    unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
+    unsafe {
+        asm!(
+            "// {0} {1} {2} {3} {4} {5} {6} {7}",
+            in(reg) 0, in(reg) 1, in(reg) 2, in(reg) 3, in(reg) 4, in(reg) 5, in(reg) 6, in(reg) 7,
+        );
+    }
 
     true
 }
