@@ -1,10 +1,12 @@
-#![feature(llvm_asm)]
 #![no_main]
 #![no_std]
 
 extern crate panic_halt;
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::{
+    arch::asm,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use cortex_m_rt::{entry, exception};
 
@@ -45,7 +47,12 @@ fn baz() {
 #[inline(never)]
 fn quux() {
     // spill variables onto the stack
-    unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
+    unsafe {
+        asm!(
+            "// {0} {1} {2} {3} {4} {5}",
+            in(reg) 0, in(reg) 1, in(reg) 2, in(reg) 3, in(reg) 4, in(reg) 5,
+        );
+    }
 }
 
 #[exception]

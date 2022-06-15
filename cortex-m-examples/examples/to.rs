@@ -1,8 +1,9 @@
-#![feature(llvm_asm)]
 #![no_main]
 #![no_std]
 
 extern crate panic_halt;
+
+use core::arch::asm;
 
 use cortex_m_rt::{entry, exception};
 use spin::Mutex; // spin = "0.5.0"
@@ -24,7 +25,12 @@ trait Foo {
     // default implementation of this method
     fn foo(&self) -> bool {
         // spill variables onto the stack
-        unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5)) }
+        unsafe {
+            asm!(
+                "// {0} {1} {2} {3} {4} {5}",
+                in(reg) 0, in(reg) 1, in(reg) 2, in(reg) 3, in(reg) 4, in(reg) 5,
+            );
+        }
 
         false
     }
@@ -40,7 +46,12 @@ struct Baz;
 impl Foo for Baz {
     // overrides the default method
     fn foo(&self) -> bool {
-        unsafe { llvm_asm!("" : : "r"(0) "r"(1) "r"(2) "r"(3) "r"(4) "r"(5) "r"(6) "r"(7)) }
+        unsafe {
+            asm!(
+                "// {0} {1} {2} {3} {4} {5} {6} {7}",
+                in(reg) 0, in(reg) 1, in(reg) 2, in(reg) 3, in(reg) 4, in(reg) 5, in(reg) 6, in(reg) 7,
+            );
+        }
 
         true
     }
@@ -52,8 +63,8 @@ impl Quux {
     // not a trait method!
     #[inline(never)]
     fn foo(&self) -> bool {
-        // NOTE(llvm_asm!) side effect to preserve function calls to this method
-        unsafe { llvm_asm!("NOP" : : : : "volatile") }
+        // side effect to preserve function calls to this method
+        cortex_m::asm::nop();
 
         false
     }
