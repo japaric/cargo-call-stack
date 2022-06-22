@@ -5,6 +5,12 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.8] - 2022-06-22
+
+### Fixed
+
+- updated LLVM IR parser to handle newer libstd's IR (~nightly-2022-06-22)
+
 ## [v0.1.7] - 2022-06-15
 
 ### Fixed
@@ -147,7 +153,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 Initial release
 
-[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.8...HEAD
+[v0.1.8]: https://github.com/japaric/cargo-call-stack/compare/v0.1.7...v0.1.8
 [v0.1.7]: https://github.com/japaric/cargo-call-stack/compare/v0.1.6...v0.1.7
 [v0.1.6]: https://github.com/japaric/cargo-call-stack/compare/v0.1.5...v0.1.6
 [v0.1.5]: https://github.com/japaric/cargo-call-stack/compare/v0.1.4...v0.1.5
