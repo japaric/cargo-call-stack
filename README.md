@@ -53,6 +53,16 @@ $ rustup +nightly component add rust-src
 
 ## Example usage
 
+> **NOTE** this tool requires that your Cargo project is configured to use *fat LTO* when Cargo uses
+> the release profile. This is not the default configuration (as of Rust 1.63) so you'll need to add
+> this to your `Cargo.toml`:
+
+``` toml
+[profile.release]
+# `lto = true` should also work
+lto = 'fat'
+```
+
 The tool builds your program in release mode with LTO enabled, analyses it and
 then prints a dot file to stdout. See `cargo call-stack -h` for a list of build
 options (e.g. `--features`).
