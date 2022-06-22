@@ -228,10 +228,7 @@ fn indirect_call(i: &str) -> IResult<&str, Stmt> {
     .0;
     let (i, output) = alt((map(super::type_, Some), map(tag("void"), |_| None)))(i)?;
     let i = space1(i)?.0;
-    let i = char('%')(i)?.0;
-    let i = opt(char('_'))(i)?.0;
-    let i = digit1(i)?.0;
-    let i = many0(|i| tag(".i")(i))(i)?.0;
+    let i = super::local(i)?.0;
     let (i, inputs) = delimited(
         char('('),
         separated_list(
@@ -511,6 +508,20 @@ mod tests {
                     inputs: vec![
                         Type::Pointer(Box::new(Type::Struct(vec![]))), Type::Pointer(Box::new(Type::Integer(32))), Type::Pointer(Box::new(Type::Integer(16)))
                     ],
+                    output: None,
+                })
+            ))
+        );
+    }
+
+    #[test]
+    fn call_gh58() {
+        assert_eq!(
+            super::indirect_call("tail call void %f()"),
+            Ok((
+                "",
+                Stmt::IndirectCall(FnSig {
+                    inputs: vec![],
                     output: None,
                 })
             ))
