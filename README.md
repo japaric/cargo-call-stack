@@ -1,6 +1,6 @@
 # `cargo-call-stack`
 
-> Static, whole program stack analysis
+> Static, whole program stack usage analyzer
 
 <p align="center">
   <a href="https://japaric.github.io/cargo-call-stack/cycle.svg">
@@ -16,6 +16,13 @@ Other examples:
 **HEADS UP**: This tool relies on an experimental feature (`-Z stack-sizes`)
 and implementation details of `rustc` (like symbol mangling) and could stop
 working with a nightly toolchain at any time. You have been warned!
+
+**NOTE**: This tool main use case are embedded (microcontroller) programs that lack, or have very
+little, indirect function calls and recursion. This tool is of very limited use -- specially its
+stack usage analysis -- on programs that link to the standard library as even the smallest program
+that links to the standard library will contain a large number of indirect function calls (like
+trait object dynamic dispatch specially in `core::fmt`) and potential recursion (specially in
+panicking branches).
 
 ## Features
 
@@ -41,6 +48,12 @@ working with a nightly toolchain at any time. You have been warned!
   that do indirect calls but it will likely be missing edges or contain
   incorrect edges. It's best to use this tool on programs that only do direct
   function calls.
+
+## Known limitations
+
+- Dynamically linked binaries are not supported. As a portion of the call graph is injected at
+  runtime by the dynamic linker is not possible to produce a complete call graph or compute an upper
+  bound of the program's stack usage.
 
 ## Installation
 

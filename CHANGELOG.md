@@ -5,6 +5,13 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.9] - 2022-06-22
+
+### Fixed
+
+- handle enough llvm intrinsics to be able to produce a call graph for a statically linked "hello,
+  world" binary (Linux MUSL target).
+
 ## [v0.1.8] - 2022-06-22
 
 ### Fixed
@@ -153,7 +160,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 Initial release
 
-[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.9...HEAD
+[v0.1.9]: https://github.com/japaric/cargo-call-stack/compare/v0.1.8...v0.1.9
 [v0.1.8]: https://github.com/japaric/cargo-call-stack/compare/v0.1.7...v0.1.8
 [v0.1.7]: https://github.com/japaric/cargo-call-stack/compare/v0.1.6...v0.1.7
 [v0.1.6]: https://github.com/japaric/cargo-call-stack/compare/v0.1.5...v0.1.6
