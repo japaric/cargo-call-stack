@@ -34,7 +34,7 @@ jobs:
           override: true
           profile: minimal
           target: thumbv7m-none-eabi
-          toolchain: nightly
+          toolchain: nightly-2022-06-18
       - run: cargo install --path . --debug
       - name: Can analyze example firmware
         run: cargo test
