@@ -698,6 +698,11 @@ fn run() -> Result<i32, failure::Error> {
                         continue;
                     }
 
+                    // noalias metadata does not lower to machine code
+                    if *func == "llvm.experimental.noalias.scope.decl" {
+                        continue;
+                    }
+
                     assert!(
                         !func.starts_with("llvm."),
                         "BUG: unhandled llvm intrinsic: {}",
