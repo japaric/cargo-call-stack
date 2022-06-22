@@ -350,6 +350,10 @@ mod tests {
         assert_eq!(super::local("%."), Ok(("", Local)));
 
         assert_eq!(super::local("%.9"), Ok(("", Local)));
+
+        assert_eq!(super::local("%f"), Ok(("", Local)));
+
+        assert_eq!(super::local("%_17.0.i.i.i.i.i"), Ok(("", Local)));
     }
 
     #[test]
