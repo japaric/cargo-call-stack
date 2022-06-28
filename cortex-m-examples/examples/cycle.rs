@@ -1,18 +1,16 @@
 #![no_main]
 #![no_std]
 
-extern crate panic_halt;
-
 use core::{
     arch::asm,
     sync::atomic::{AtomicBool, Ordering},
 };
 
 use cortex_m_rt::{entry, exception};
+use panic_halt as _;
 
 static X: AtomicBool = AtomicBool::new(true);
 
-#[inline(never)]
 #[entry]
 fn main() -> ! {
     foo();

@@ -21,5 +21,6 @@ fn div64(x: u64, y: u64) -> u64 {
 
 #[exception]
 fn SysTick() {
-    X.fetch_add(1, Ordering::Relaxed);
+    let old = X.load(Ordering::Relaxed);
+    X.store(old.wrapping_add(1), Ordering::Relaxed);
 }

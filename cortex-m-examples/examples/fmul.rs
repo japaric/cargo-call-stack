@@ -1,11 +1,10 @@
 #![no_main]
 #![no_std]
 
-extern crate panic_halt;
-
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use cortex_m_rt::exception;
+use panic_halt as _;
 
 static X: AtomicU32 = AtomicU32::new(0);
 
@@ -21,5 +20,6 @@ fn main() -> ! {
 
 #[exception]
 fn SysTick() {
-    X.fetch_add(1, Ordering::Relaxed);
+    let old = X.load(Ordering::Relaxed);
+    X.store(old.wrapping_add(1), Ordering::Relaxed);
 }

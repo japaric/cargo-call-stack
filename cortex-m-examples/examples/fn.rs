@@ -1,18 +1,16 @@
 #![no_main]
 #![no_std]
 
-extern crate panic_halt;
-
 use core::{
     arch::asm,
     sync::atomic::{AtomicPtr, Ordering},
 };
 
 use cortex_m_rt::{entry, exception};
+use panic_halt as _;
 
 static F: AtomicPtr<fn() -> bool> = AtomicPtr::new(foo as *mut _);
 
-#[inline(never)]
 #[entry]
 fn main() -> ! {
     if let Some(f) = unsafe { F.load(Ordering::Relaxed).as_ref() } {
@@ -38,8 +36,8 @@ fn foo() -> bool {
 fn bar() -> bool {
     unsafe {
         asm!(
-            "// {0} {1} {2} {3} {4} {5} {6} {7}",
-            in(reg) 0, in(reg) 1, in(reg) 2, in(reg) 3, in(reg) 4, in(reg) 5, in(reg) 6, in(reg) 7,
+            "// {0} {1} {2} {3} {4} {5} {6}",
+            in(reg) 0, in(reg) 1, in(reg) 2, in(reg) 3, in(reg) 4, in(reg) 5, in(reg) 6,
         );
     }
 
