@@ -34,7 +34,8 @@ jobs:
           override: true
           profile: minimal
           target: thumbv7m-none-eabi
-          toolchain: nightly-2022-06-18
+          toolchain: nightly-2022-06-22
+      - run: rustup target add thumbv6m-none-eabi
       - run: cargo install --path . --debug
       - name: Can analyze example firmware
         run: cargo test

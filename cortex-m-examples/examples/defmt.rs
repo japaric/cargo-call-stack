@@ -18,7 +18,7 @@ defmt::timestamp!("{=usize}", {
 
 #[entry]
 fn main() -> ! {
-    defmt::info!("Hello, world!");
+    defmt::println!("Hello, world!");
 
     loop {}
 }
