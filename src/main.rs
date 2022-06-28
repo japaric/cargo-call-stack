@@ -130,6 +130,26 @@ fn run() -> Result<i32, failure::Error> {
         }
     }
 
+    let meta = rustc_version::version_meta()?;
+    let host = meta.host;
+    let cwd = env::current_dir()?;
+    let project = Project::query(cwd)?;
+    let target = project.target().or(target_flag).unwrap_or(&host);
+
+    let mut is_no_std = false;
+    {
+        let output = Command::new("rustc")
+            .args(&["--print=cfg", "--target", target])
+            .output()?;
+        for line in str::from_utf8(&output.stdout)?.lines() {
+            if let Some(value) = line.strip_prefix("target_os=") {
+                if value == "\"none\"" {
+                    is_no_std = true;
+                }
+            }
+        }
+    };
+
     let mut cargo = Command::new("cargo");
     cargo.arg("rustc");
 
@@ -157,8 +177,14 @@ fn run() -> Result<i32, failure::Error> {
         cargo.arg("--release");
     }
 
+    let build_std = if is_no_std {
+        "-Zbuild-std=core,alloc,compiler_builtins"
+    } else {
+        "-Zbuild-std"
+    };
+
     cargo.args(&[
-        "-Zbuild-std",
+        build_std,
         "--color=always",
         "--",
         // .ll file
@@ -173,9 +199,6 @@ fn run() -> Result<i32, failure::Error> {
     cargo.env("CARGO_CALL_STACK_RUSTC_WRAPPER", "1");
     cargo.env("RUSTC_WRAPPER", env::current_exe()?);
     cargo.stderr(Stdio::piped());
-
-    let cwd = env::current_dir()?;
-    let project = Project::query(cwd)?;
 
     // "touch" some source file to trigger a rebuild
     let root = project.toml().parent().expect("UNREACHABLE");
@@ -229,9 +252,6 @@ fn run() -> Result<i32, failure::Error> {
         compiler_builtins_rlib_path.expect("`compiler_builtins` was not linked");
     let compiler_builtins_ll_path =
         compiler_builtins_ll_path.expect("`compiler_builtins` LLVM IR unavailable");
-
-    let meta = rustc_version::version_meta()?;
-    let host = meta.host;
 
     let mut path: PathBuf = if is_example {
         project.path(Artifact::Example(file), profile, target_flag, &host)?
