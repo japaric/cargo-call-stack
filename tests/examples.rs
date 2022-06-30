@@ -216,6 +216,15 @@ fn div64() {
     }
 }
 
+#[test]
+fn gh63() {
+    if channel_is_nightly() {
+        for_each_target(|target| {
+            let _should_not_error = call_stack("memcmp-no", target);
+        })
+    }
+}
+
 fn channel_is_nightly() -> bool {
     rustc_version::version_meta().map(|m| m.channel).ok() == Some(Channel::Nightly)
 }
