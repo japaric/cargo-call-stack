@@ -162,6 +162,7 @@ fn argument(i: &str) -> IResult<&str, Argument> {
         map(super::getelementptr, drop),
         map(super::local, drop),
         map(super::function, drop),
+        map(super::null, drop),
         map(digit1, drop),
     ))(i)?
     .0;
@@ -433,6 +434,23 @@ mod tests {
 
     #[test]
     fn indirect_call() {
+        assert_eq!(
+            super::indirect_call(
+                r#"tail call noundef i8 %14({}* noundef nonnull align 1 %_6.0.i.i.i, i8 noundef 2, i32* noalias noundef align 4 dereferenceable_or_null(4) null) #38, !dbg !22079, !range !22082, !noalias !22081"#
+            ),
+            Ok((
+                "",
+                Stmt::IndirectCall(FnSig {
+                    inputs: vec![
+                        Type::Pointer(Box::new(Type::Struct(vec![]))),
+                        Type::Integer(8),
+                        Type::Pointer(Box::new(Type::Integer(32)))
+                    ],
+                    output: Some(Box::new(Type::Integer(8)))
+                })
+            ))
+        );
+
         assert_eq!(
             super::indirect_call(r#"tail call i32 %0(i32 0) #8, !dbg !1200"#),
             Ok((
