@@ -734,6 +734,14 @@ fn run() -> Result<i32, failure::Error> {
                         func
                     );
 
+                    // some intrinsics can be directly lowered to machine code
+                    // if the intrinsic has no corresponding node (symbol in the output ELF) assume
+                    // that it has been lowered to machine code
+                    const SYMBOLLESS_INTRINSICS: &[&str] = &["memcmp"];
+                    if SYMBOLLESS_INTRINSICS.contains(func) && !indices.contains_key(*func) {
+                        continue;
+                    }
+
                     // use canonical name
                     let callee = if let Some(canon) = aliases.get(func) {
                         indices[*canon]
