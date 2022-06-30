@@ -130,6 +130,14 @@ fn local(i: &str) -> IResult<&str, Local> {
     Ok((i, Local))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Null;
+
+fn null(i: &str) -> IResult<&str, Null> {
+    let i = tag("null")(i)?.0;
+    Ok((i, Null))
+}
+
 // `internal`, `fastcc`, `dereferenceable(4)`, etc.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Attribute;
