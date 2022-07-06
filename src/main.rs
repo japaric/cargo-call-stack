@@ -557,7 +557,9 @@ fn run() -> Result<i32, failure::Error> {
             assert!(!is_trait_method, "BUG: undefined trait method");
 
             indirects.entry(sig).or_default().callees.insert(idx);
-        } else {
+        } else if !is_outlined_function(canonical_name) {
+            // ^ functions produced by LLVM's function outliner are never called through function
+            // pointers (as of LLVM 14.0.6)
             has_untyped_symbols = true;
             warn!("no type information for `{}`", canonical_name);
         }
@@ -883,6 +885,20 @@ fn run() -> Result<i32, failure::Error> {
                             );
 
                             *llvm_stack = stack;
+                        } else if is_outlined_function(canonical_name) {
+                            // ^ functions produced by LLVM's function outliner are not properly
+                            // analyzed by LLVM's emit-stack-sizes pass and are all assigned a stack
+                            // usage of 0 bytes, which is sometimes wrong
+                            if *llvm_stack == 0 && stack != *llvm_stack {
+                                warn!(
+                                    "LLVM reported that `{}` uses {} bytes of stack but \
+                                     our analysis reported {} bytes; overriding LLVM's result \
+                                     (function was produced by LLVM's function outlining pass)",
+                                    canonical_name, llvm_stack, stack
+                                );
+
+                                *llvm_stack = stack;
+                            }
                         } else {
                             // in all other cases our results should match
 
@@ -1521,5 +1537,15 @@ impl Target {
             Target::Thumbv6m | Target::Thumbv7m => true,
             Target::Other => false,
         }
+    }
+}
+
+// LLVM's function outliner pass produces symbols of the form `OUTLINED_FUNCTION_NNN` where `NNN` is
+// a monotonically increasing number
+fn is_outlined_function(name: &str) -> bool {
+    if let Some(number) = name.strip_prefix("OUTLINED_FUNCTION_") {
+        u64::from_str_radix(number, 10).is_ok()
+    } else {
+        false
     }
 }
