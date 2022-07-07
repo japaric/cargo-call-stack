@@ -1,5 +1,6 @@
 use core::fmt;
 
+use anyhow::anyhow;
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_until, take_while1},
@@ -51,7 +52,7 @@ impl<'a> fmt::Display for FnSig<'a> {
     }
 }
 
-pub fn parse(ll: &str) -> Result<Vec<Item>, failure::Error> {
+pub fn parse(ll: &str) -> anyhow::Result<Vec<Item>> {
     items(ll).map(|t| t.1).map_err(|e| {
         let e = e.map(|(rest, kind)| {
             let offset = ll.len()-rest.len();
@@ -65,7 +66,7 @@ pub fn parse(ll: &str) -> Result<Vec<Item>, failure::Error> {
 
             unreachable!("couldn't find line the parse error at offset {} refers to", offset)
         });
-        failure::format_err!(
+        anyhow!(
             "BUG: failed to parse LLVM IR; please submit a cargo-call-stack bug report and attach the `.ll` file: {:?}",
             e
         )
