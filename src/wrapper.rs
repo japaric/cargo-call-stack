@@ -15,14 +15,14 @@
 
 use std::{env, process::Command};
 
-use failure::format_err;
+use anyhow::anyhow;
 
 pub(crate) const COMPILER_BUILTINS_RLIB_PATH_MARKER: &str =
     "@CARGO_CALL_STACK:compiler_builtins_rlib_path@";
 pub(crate) const COMPILER_BUILTINS_LL_PATH_MARKER: &str =
     "@CARGO_CALL_STACK:compiler_builtins_ll_path@";
 
-pub(crate) fn wrapper() -> Result<i32, failure::Error> {
+pub(crate) fn wrapper() -> anyhow::Result<i32> {
     let mut args = env::args().skip(1);
     let rustc_path = args.next().unwrap();
     let mut rustc = Command::new(&rustc_path);
@@ -44,7 +44,7 @@ pub(crate) fn wrapper() -> Result<i32, failure::Error> {
 
         let out_dir = args
             .out_dir
-            .ok_or_else(|| format_err!("missing `--out-dir` argument"))?;
+            .ok_or_else(|| anyhow!("missing `--out-dir` argument"))?;
         let ll_path = format!("{}/{}{}.ll", out_dir, args.crate_name, args.extra_filename);
         eprintln!("{}{}", COMPILER_BUILTINS_LL_PATH_MARKER, ll_path);
     }
@@ -53,7 +53,7 @@ pub(crate) fn wrapper() -> Result<i32, failure::Error> {
 
     let status = rustc
         .status()
-        .map_err(|e| format_err!("failed to spawn `{}`: {}", rustc_path, e))?;
+        .map_err(|e| anyhow!("failed to spawn `{}`: {}", rustc_path, e))?;
     Ok(status.code().unwrap_or(-1))
 }
 
@@ -70,7 +70,7 @@ struct Extern {
 }
 
 impl RustcArgs {
-    fn parse(args: &mut dyn Iterator<Item = &str>) -> failure::Fallible<Self> {
+    fn parse(args: &mut dyn Iterator<Item = &str>) -> anyhow::Result<Self> {
         const NOPRELUDE: &str = "noprelude:";
         const DASH_C: &str = "-C";
 
@@ -84,7 +84,7 @@ impl RustcArgs {
                 "--extern" => {
                     let arg = args
                         .next()
-                        .ok_or_else(|| format_err!("missing argument for `--extern`"))?;
+                        .ok_or_else(|| anyhow!("missing argument for `--extern`"))?;
                     let mut arg = &*arg;
                     if arg.starts_with(NOPRELUDE) {
                         arg = &arg[NOPRELUDE.len()..];
@@ -102,14 +102,14 @@ impl RustcArgs {
                 "--crate-name" => {
                     crate_name = Some(
                         args.next()
-                            .ok_or_else(|| format_err!("missing argument for `--crate-name`"))?
+                            .ok_or_else(|| anyhow!("missing argument for `--crate-name`"))?
                             .to_string(),
                     );
                 }
                 "--out-dir" => {
                     out_dir = Some(
                         args.next()
-                            .ok_or_else(|| format_err!("missing argument for `--out-dir`"))?
+                            .ok_or_else(|| anyhow!("missing argument for `--out-dir`"))?
                             .to_string(),
                     );
                 }
@@ -120,7 +120,7 @@ impl RustcArgs {
                     if arg.is_empty() {
                         next = args
                             .next()
-                            .ok_or_else(|| format_err!("missing argument for `-C`"))?;
+                            .ok_or_else(|| anyhow!("missing argument for `-C`"))?;
                         arg = &next;
                     }
 
@@ -132,9 +132,7 @@ impl RustcArgs {
                             extra_filename = Some(
                                 split
                                     .next()
-                                    .ok_or_else(|| {
-                                        format_err!("missing value for `-Cextra-filename`")
-                                    })?
+                                    .ok_or_else(|| anyhow!("missing value for `-Cextra-filename`"))?
                                     .to_string(),
                             );
                         }
@@ -147,7 +145,7 @@ impl RustcArgs {
 
         Ok(Self {
             extra_filename: extra_filename.unwrap_or_default(),
-            crate_name: crate_name.ok_or_else(|| format_err!("missing `--crate-name` argument"))?,
+            crate_name: crate_name.ok_or_else(|| anyhow!("missing `--crate-name` argument"))?,
             out_dir,
             extern_crates,
         })

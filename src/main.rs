@@ -16,11 +16,11 @@ use std::{
     time::SystemTime,
 };
 
+use anyhow::{anyhow, bail};
 use ar::Archive;
 use cargo_project::{Artifact, Profile, Project};
 use clap::{crate_authors, crate_version, App, Arg};
 use env_logger::{Builder, Env};
-use failure::format_err;
 use filetime::FileTime;
 use log::{error, warn};
 use petgraph::{
@@ -41,7 +41,7 @@ mod ir;
 mod thumb;
 mod wrapper;
 
-fn main() -> Result<(), failure::Error> {
+fn main() -> anyhow::Result<()> {
     match run() {
         Ok(ec) => process::exit(ec),
         Err(e) => {
@@ -55,7 +55,7 @@ fn main() -> Result<(), failure::Error> {
 const FONT: &str = "monospace";
 
 #[allow(deprecated)]
-fn run() -> Result<i32, failure::Error> {
+fn run() -> anyhow::Result<i32> {
     if env::var_os("CARGO_CALL_STACK_RUSTC_WRAPPER").is_some() {
         return wrapper::wrapper();
     }
@@ -124,9 +124,7 @@ fn run() -> Result<i32, failure::Error> {
         (true, false) => file = matches.value_of("example").unwrap(),
         (false, true) => file = matches.value_of("bin").unwrap(),
         _ => {
-            return Err(failure::err_msg(
-                "Please specify either --example <NAME> or --bin <NAME>.",
-            ));
+            bail!("Please specify either --example <NAME> or --bin <NAME>.")
         }
     }
 
@@ -260,7 +258,7 @@ fn run() -> Result<i32, failure::Error> {
     };
 
     let elf = fs::read(&path)
-        .map_err(|e| format_err!("couldn't open ELF file `{}`: {}", path.display(), e))?;
+        .map_err(|e| anyhow!("couldn't open ELF file `{}`: {}", path.display(), e))?;
 
     // load llvm-ir file
     let mut ll = None;
@@ -302,12 +300,12 @@ fn run() -> Result<i32, failure::Error> {
     let ll_path = ll.expect("unreachable");
     let obj = ll_path.with_extension("o");
     let ll = fs::read_to_string(&ll_path)
-        .map_err(|e| format_err!("couldn't read LLVM IR from `{}`: {}", ll_path.display(), e))?;
+        .map_err(|e| anyhow!("couldn't read LLVM IR from `{}`: {}", ll_path.display(), e))?;
     let obj = fs::read(&obj)
-        .map_err(|e| format_err!("couldn't read object file `{}`: {}", obj.display(), e))?;
+        .map_err(|e| anyhow!("couldn't read object file `{}`: {}", obj.display(), e))?;
 
     let compiler_builtins_ll = fs::read_to_string(&compiler_builtins_ll_path).map_err(|e| {
-        format_err!(
+        anyhow!(
             "couldn't read `compiler_builtins` LLVM IR from `{}`: {}",
             compiler_builtins_ll_path,
             e
@@ -315,14 +313,14 @@ fn run() -> Result<i32, failure::Error> {
     })?;
 
     let items = crate::ir::parse(&ll).map_err(|e| {
-        format_err!(
+        anyhow!(
             "failed to parse application's LLVM IR from `{}`: {}",
             ll_path.display(),
             e
         )
     })?;
     let compiler_builtins_items = crate::ir::parse(&compiler_builtins_ll).map_err(|e| {
-        format_err!(
+        anyhow!(
             "failed to parse `compiler_builtins` LLVM IR from `{}`: {}",
             compiler_builtins_ll_path,
             e
@@ -363,7 +361,7 @@ fn run() -> Result<i32, failure::Error> {
 
     let mut ar = Archive::new(
         File::open(&compiler_builtins_rlib_path)
-            .map_err(|e| format_err!("couldn't open `{}`: {}", compiler_builtins_rlib_path, e))?,
+            .map_err(|e| anyhow!("couldn't open `{}`: {}", compiler_builtins_rlib_path, e))?,
     );
 
     let mut buf = vec![];
@@ -800,7 +798,7 @@ fn run() -> Result<i32, failure::Error> {
     // disambiguate from the LLVM-IR (e.g. does this `llvm.memcpy` lower to a call to
     // `__aebi_memcpy`, a call to `__aebi_memcpy4` or machine instructions?)
     if target_.is_thumb() {
-        let elf = ElfFile::new(&elf).map_err(failure::err_msg)?;
+        let elf = ElfFile::new(&elf).map_err(anyhow::Error::msg)?;
         let sect = elf.find_section_by_name(".symtab").expect("UNREACHABLE");
         let mut tags: Vec<_> = match sect.get_data(&elf).unwrap() {
             SectionData::SymbolTable32(entries) => entries
