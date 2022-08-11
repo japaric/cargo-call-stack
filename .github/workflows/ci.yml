@@ -13,31 +13,25 @@ jobs:
   host-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          override: true
-          profile: minimal
-          toolchain: stable
+      - uses: actions/checkout@v3
+
       - name: Run disassembler test suite
         run: cargo test
 
   firmware-test:
-    env:
-      FW_TARGET: thumbv7m-none-eabi
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          components: rust-src
-          override: true
-          profile: minimal
-          target: thumbv7m-none-eabi
-          toolchain: nightly-2022-06-22
-      - run: rustup target add thumbv6m-none-eabi
-      - run: cargo install --path . --debug
-      - name: Can analyze example firmware
+      - uses: actions/checkout@v3
+
+      - name: Set up nightly toolchain (~1.63)
+        run: |
+          rustup default nightly-2022-08-11
+          rustup target add thumbv6m-none-eabi thumbv7m-none-eabi
+
+      - name: Install cargo-call-stack
+        run: cargo install --path . --debug
+
+      - name: Analyze example firmware
         run: cargo test
 
   # Refs: https://github.com/rust-lang/crater/blob/9ab6f9697c901c4a44025cf0a39b73ad5b37d198/.github/workflows/bors.yml#L125-L149
