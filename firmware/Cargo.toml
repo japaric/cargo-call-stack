@@ -2,7 +2,7 @@
 authors = ["Jorge Aparicio <jorge@japaric.io>"]
 edition = "2018"
 readme = "README.md"
-name = "app"
+name = "firmware"
 version = "0.1.0"
 
 [dependencies]

@@ -221,7 +221,7 @@ fn channel_is_nightly() -> bool {
 fn call_stack(ex: &str, target: &str) -> String {
     let output = Command::new("cargo")
         .args(&["call-stack", "--example", ex, "--target", target])
-        .current_dir(env::current_dir().unwrap().join("cortex-m-examples"))
+        .current_dir(env::current_dir().unwrap().join("firmware"))
         .output()
         .unwrap();
     if !output.status.success() {
