@@ -1,0 +1,15 @@
+[package]
+authors = ["Jorge Aparicio <jorge@japaric.io>"]
+edition = "2018"
+readme = "README.md"
+name = "firmware"
+version = "0.1.0"
+
+[dependencies]
+panic-halt = "0.2.0"
+
+[profile.release]
+codegen-units = 1
+debug = true
+lto = 'fat'
+opt-level = 'z'

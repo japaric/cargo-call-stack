@@ -6,10 +6,8 @@ use core::{
     panic::PanicInfo,
 };
 
-use cortex_m_rt::entry;
-
-#[entry]
-fn main() -> ! {
+#[no_mangle]
+fn _start() {
     panic!("hello, world")
 }
 
