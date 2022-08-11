@@ -1,23 +1,18 @@
 #![no_main]
 #![no_std]
 
-use core::{arch::asm, cell::Cell};
+use core::arch::asm;
 
-use cortex_m::interrupt::{self, Mutex};
-use cortex_m_rt::{entry, exception};
 use panic_halt as _;
 
-static TO: interrupt::Mutex<Cell<&'static (dyn Foo + Sync)>> = Mutex::new(Cell::new(&Bar));
-
-#[entry]
-fn main() -> ! {
+#[no_mangle]
+fn _start(trait_object: &dyn Foo) -> (&dyn Foo, &dyn Foo) {
     // trait object dispatch
-    let to = interrupt::free(|cs| TO.borrow(cs).get());
-    to.foo();
+    trait_object.foo();
 
     Quux.foo();
 
-    loop {}
+    (&Bar, &Baz)
 }
 
 trait Foo {
@@ -59,20 +54,12 @@ impl Foo for Baz {
 struct Quux;
 
 impl Quux {
-    // not a trait method!
+    // not a trait method! but function name and signature matches `Foo::foo`'s
     #[inline(never)]
     fn foo(&self) -> bool {
         // side effect to preserve function calls to this method
-        cortex_m::asm::nop();
+        unsafe { asm!("NOP") }
 
         false
     }
-}
-
-// this handler can change the trait object at any time
-#[exception]
-fn SysTick() {
-    interrupt::free(|cs| {
-        TO.borrow(cs).set(&Baz);
-    })
 }

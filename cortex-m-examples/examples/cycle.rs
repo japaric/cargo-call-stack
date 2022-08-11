@@ -6,40 +6,30 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use cortex_m_rt::{entry, exception};
 use panic_halt as _;
 
-static X: AtomicBool = AtomicBool::new(true);
-
-#[entry]
-fn main() -> ! {
-    foo();
-
+#[no_mangle]
+fn _start(x: &AtomicBool) {
+    foo(x);
     quux();
-
-    loop {}
 }
 
-// these three functions form a cycle that breaks when `SysTick` runs
+// these three functions form a cycle that breaks when `x` is `false`
 #[inline(never)]
-fn foo() {
-    if X.load(Ordering::Relaxed) {
-        bar()
+fn foo(x: &AtomicBool) {
+    if x.load(Ordering::Relaxed) {
+        bar(x)
     }
 }
 
 #[inline(never)]
-fn bar() {
-    if X.load(Ordering::Relaxed) {
-        baz()
-    }
+fn bar(x: &AtomicBool) {
+    baz(x)
 }
 
 #[inline(never)]
-fn baz() {
-    if X.load(Ordering::Relaxed) {
-        foo()
-    }
+fn baz(x: &AtomicBool) {
+    foo(x)
 }
 
 #[inline(never)]
@@ -51,9 +41,4 @@ fn quux() {
             in(reg) 0, in(reg) 1, in(reg) 2, in(reg) 3, in(reg) 4, in(reg) 5,
         );
     }
-}
-
-#[exception]
-fn SysTick() {
-    X.store(false, Ordering::Relaxed);
 }

@@ -1,24 +1,17 @@
 #![no_main]
 #![no_std]
 
-use core::{
-    arch::asm,
-    sync::atomic::{AtomicPtr, Ordering},
-};
+use core::arch::asm;
 
-use cortex_m_rt::{entry, exception};
 use panic_halt as _;
 
-static F: AtomicPtr<fn() -> bool> = AtomicPtr::new(foo as *mut _);
+#[no_mangle]
+fn _start(f: fn() -> bool) -> (usize, usize) {
+    // call via function pointer
+    f();
 
-#[entry]
-fn main() -> ! {
-    if let Some(f) = unsafe { F.load(Ordering::Relaxed).as_ref() } {
-        // call via function pointer
-        f();
-    }
-
-    loop {}
+    // keep these two functions in the resulting binary
+    (foo as usize, bar as usize)
 }
 
 fn foo() -> bool {
@@ -42,10 +35,4 @@ fn bar() -> bool {
     }
 
     true
-}
-
-// this handler can change the function pointer at any time
-#[exception]
-fn SysTick() {
-    F.store(bar as *mut _, Ordering::Relaxed);
 }

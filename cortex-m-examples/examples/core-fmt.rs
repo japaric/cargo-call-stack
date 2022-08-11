@@ -3,14 +3,11 @@
 
 use core::fmt::{self, Write as _};
 
-use cortex_m_rt::entry;
 use panic_halt as _;
 
-#[entry]
-fn main() -> ! {
+#[no_mangle]
+fn _start() {
     write!(W, "hello, world!").ok();
-
-    loop {}
 }
 
 struct W;
