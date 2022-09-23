@@ -12,8 +12,7 @@ use nom::{
 
 use crate::ir::FnSig;
 
-// NOTE we don't keep track of pointers; `i8` and `i8*` are both considered `Type::Integer`
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash)]
 pub enum Type<'a> {
     // `%"crate::module::Struct::<ConcreteType>"`
     Alias(&'a str),
@@ -42,11 +41,33 @@ pub enum Type<'a> {
     // `i8*`
     Pointer(Box<Type<'a>>),
 
+    // `ptr`
+    OpaquePointer,
+
     // `...`
     Varargs,
 
     // `<4 x i32>` See: https://llvm.org/doxygen/classllvm_1_1MVT.html
     MVTVector(usize, Box<Type<'a>>),
+}
+
+impl<'a> PartialEq for Type<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::OpaquePointer, Self::OpaquePointer) => false,
+
+            // `derive(PartialEq)` implementation
+            (Self::Alias(l0), Self::Alias(r0)) => l0 == r0,
+            (Self::Array(l0, l1), Self::Array(r0, r1)) => l0 == r0 && l1 == r1,
+            (Self::Integer(l0), Self::Integer(r0)) => l0 == r0,
+            (Self::PackedStruct(l0), Self::PackedStruct(r0)) => l0 == r0,
+            (Self::Struct(l0), Self::Struct(r0)) => l0 == r0,
+            (Self::Fn(l0), Self::Fn(r0)) => l0 == r0,
+            (Self::Pointer(l0), Self::Pointer(r0)) => l0 == r0,
+            (Self::MVTVector(l0, l1), Self::MVTVector(r0, r1)) => l0 == r0 && l1 == r1,
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
 }
 
 impl<'a> Type<'a> {
@@ -110,6 +131,10 @@ impl<'a> fmt::Display for Type<'a> {
 
             Type::Float => {
                 f.write_str("float")?;
+            }
+
+            Type::OpaquePointer => {
+                f.write_str("ptr")?;
             }
 
             Type::Integer(n) => {
@@ -189,6 +214,10 @@ fn float(i: &str) -> IResult<&str, Type> {
     Ok((tag("float")(i)?.0, Type::Float))
 }
 
+fn opaque_pointer(i: &str) -> IResult<&str, Type> {
+    Ok((tag("ptr")(i)?.0, Type::OpaquePointer))
+}
+
 fn integer(i: &str) -> IResult<&str, Type> {
     let i = char('i')(i)?.0;
     let (i, count) = map_res(digit1, usize::from_str)(i)?;
@@ -262,6 +291,7 @@ pub fn type_(i: &str) -> IResult<&str, Type> {
             alias,
             double,
             float,
+            opaque_pointer,
             integer,
             varargs,
             mvt_vector,

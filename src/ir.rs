@@ -166,7 +166,7 @@ fn attribute(i: &str) -> IResult<&str, Attribute> {
         }
 
         // have this branch always error because this is not an attribute but part of a type
-        "double" | "float" | "void" => {
+        "double" | "float" | "void" | "ptr" => {
             return Err(nom::Err::Error((i, ErrorKind::Switch)));
         }
 
