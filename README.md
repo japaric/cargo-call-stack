@@ -371,6 +371,10 @@ $5 = (void *) 0x20005000
 
 ## Trait object dispatch
 
+> NOTE as of ~nightly-2022-09-20 there's no distinction between function pointers and trait objects
+> at the llvm-ir so the analysis can insert an edge from a dynamic dispatch call site (caller) to a
+> regular function (callee)
+
 In *some* cases the tool can produce correct call graphs for programs that use
 trait objects -- more details about where and how it fails in the ["Known
 limitations"](#known-limitations) section. Here's an example:
@@ -464,6 +468,10 @@ trait method: that's because the tool operates on LLVM-IR where there's no
 `bool` primitive and most of Rust's type information has been erased.
 
 ## Function pointers
+
+> NOTE as of ~nightly-2022-09-20 llvm discards type information associated to pointers and uses
+> opaque pointers in llvm-ir so functions whose signature include references (and raw pointers) will
+> include more callee edges that will never occur in practice.
 
 In *some* cases the tool can produce correct call graphs for programs that
 invoke functions via pointers (e.g. `fn()`). Here's an example:
@@ -604,6 +612,18 @@ Note that the node that represents the indirect function call has type `i32 ()*`
 LLVM, there are only signed integers. This leads the tool to wrongly add an edge
 between `i32 ()*` and `baz`. If the tool had Rust's type information then this
 edge would have not been added.
+
+### Opaque pointers in llvm-ir
+
+As of ~nightly-2022-09-20 llvm is discarding type information associated to pointers and instead
+using opaque pointers (`ptr`) in llvm-ir.
+This results in even greater loss of type information, for example:
+
+- the signature of `fn f(x: &i32) -> bool` becomes `fn(ptr) -> i1` in llvm-ir
+- the signature of `impl Foo { fn f(&self) -> bool }` also becomes `fn(ptr) -> i1` in llvm-ir
+
+so the two are callee candidates for both a function pointer call with signature `fn(&T) -> bool`
+and for dynamic dispatch of a method with signature `fn(&self) -> bool`
 
 ### Miscellaneous
 

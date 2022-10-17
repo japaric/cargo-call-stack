@@ -595,6 +595,15 @@ mod tests {
                 Parameter(Type::Pointer(Box::new(Type::Alias("ExceptionFrame"))))
             ))
         );
+
+        // nightly-2022-09-23 / compiler-builtins / __rust_i128_addo
+        // cannot rely on `assert_eq` because `PartialEq` returns `false`
+        assert_eq!(
+            Ok(("", Parameter(Type::OpaquePointer))),
+            super::parameter(
+                "ptr noalias nocapture noundef writeonly sret({ i128, i8 }) dereferenceable(24) %0",
+            ),
+        );
     }
 
     #[test]
@@ -741,5 +750,33 @@ mod tests {
                 }
             ))
         );
+
+        // nightly-2022-09-23 / compiler-builtins
+        let define = super::parse(include_str!("define/parse8.ll").trim())
+            .unwrap()
+            .1;
+        assert_eq!("__rust_i128_addo", define.name);
+        assert_eq!(vec![Stmt::Other], define.stmts);
+        assert!(define.sig.output.is_none());
+        assert_eq!(Type::OpaquePointer, define.sig.inputs[0]);
+        assert_eq!(
+            [Type::Integer(128), Type::Integer(128)],
+            define.sig.inputs[1..]
+        );
+
+        // nightly-2022-09-23 / compiler-builtins
+        let define = super::parse(include_str!("define/parse9.ll").trim())
+            .unwrap()
+            .1;
+
+        assert_eq!(
+            "_ZN17compiler_builtins3mem6memcpy17he02e6130a63bff3aE",
+            define.name
+        );
+        assert_eq!(vec![Stmt::Other], define.stmts);
+        assert_eq!(Some(&Type::OpaquePointer), define.sig.output.as_deref(),);
+        assert_eq!(Type::OpaquePointer, define.sig.inputs[0]);
+        assert_eq!(Type::OpaquePointer, define.sig.inputs[1]);
+        assert_eq!([Type::Integer(32)], define.sig.inputs[2..]);
     }
 }
