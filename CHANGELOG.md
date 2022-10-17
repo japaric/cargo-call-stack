@@ -5,6 +5,12 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.11] - 2022-10-17
+
+### Fixed
+
+- adapted parser and analysis pass to work with new-ish `ptr` type in llvm-ir
+
 ## [v0.1.11] - 2022-07-07
 
 ### Added

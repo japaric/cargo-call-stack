@@ -15,7 +15,7 @@ Other examples:
 
 **HEADS UP**: This tool relies on an experimental feature (`-Z stack-sizes`)
 and implementation details of `rustc` (like symbol mangling) and could stop
-working with a nightly toolchain at any time. You have been warned!
+working with a nightly toolchain at any time. You have been warned! Last tested nightly: 2022-09-20.
 
 **NOTE**: This tool main use case are embedded (microcontroller) programs that lack, or have very
 little, indirect function calls and recursion. This tool is of very limited use -- specially its
