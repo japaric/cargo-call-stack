@@ -371,7 +371,7 @@ $5 = (void *) 0x20005000
 
 ## Trait object dispatch
 
-> NOTE as of ~nightly-2022-10-17 there's no distinction between function pointers and trait objects
+> NOTE as of ~nightly-2022-09-20 there's no distinction between function pointers and trait objects
 > at the llvm-ir so the analysis can insert an edge from a dynamic dispatch call site (caller) to a
 > regular function (callee)
 
@@ -469,7 +469,7 @@ trait method: that's because the tool operates on LLVM-IR where there's no
 
 ## Function pointers
 
-> NOTE as of ~nightly-2022-10-17 llvm discards type information associated to pointers and uses
+> NOTE as of ~nightly-2022-09-20 llvm discards type information associated to pointers and uses
 > opaque pointers in llvm-ir so functions whose signature include references (and raw pointers) will
 > include more callee edges that will never occur in practice.
 
@@ -615,7 +615,7 @@ edge would have not been added.
 
 ### Opaque pointers in llvm-ir
 
-As of ~nightly-2022-10-17 llvm is discarding type information associated to pointers and instead
+As of ~nightly-2022-09-20 llvm is discarding type information associated to pointers and instead
 using opaque pointers (`ptr`) in llvm-ir.
 This results in even greater loss of type information, for example:
 

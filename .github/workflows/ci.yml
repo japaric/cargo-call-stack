@@ -23,9 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Set up nightly toolchain (~1.63)
+      - name: Set up nightly toolchain (~1.64)
         run: |
-          rustup default nightly-2022-08-11
+          rustup default nightly-2022-09-20
           rustup target add thumbv6m-none-eabi thumbv7m-none-eabi
           rustup component add rust-src
 
