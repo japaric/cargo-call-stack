@@ -5,7 +5,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
-## [v0.1.11] - 2022-10-17
+## [v0.1.12] - 2022-10-17
 
 ### Fixed
 
@@ -183,7 +183,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 Initial release
 
-[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.11...HEAD
+[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.12...HEAD
+[v0.1.12]: https://github.com/japaric/cargo-call-stack/compare/v0.1.11...v0.1.12
 [v0.1.11]: https://github.com/japaric/cargo-call-stack/compare/v0.1.10...v0.1.11
 [v0.1.10]: https://github.com/japaric/cargo-call-stack/compare/v0.1.9...v0.1.10
 [v0.1.9]: https://github.com/japaric/cargo-call-stack/compare/v0.1.8...v0.1.9
