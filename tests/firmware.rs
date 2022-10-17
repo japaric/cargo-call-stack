@@ -115,6 +115,55 @@ fn function_pointer() {
 }
 
 #[test]
+fn function_pointer_ptr() {
+    if channel_is_nightly() {
+        for_each_target(|target| {
+            let dot = call_stack("function-pointer-ptr", target);
+
+            let mut foo = None;
+            let mut bar = None;
+            let mut fn_call = None;
+
+            for line in dot.lines() {
+                if line.contains("label=\"function_pointer_ptr::foo\\n") {
+                    foo = Some(
+                        line.split_whitespace()
+                            .next()
+                            .unwrap()
+                            .parse::<u32>()
+                            .unwrap(),
+                    );
+                } else if line.contains("label=\"function_pointer_ptr::bar\\n") {
+                    bar = Some(
+                        line.split_whitespace()
+                            .next()
+                            .unwrap()
+                            .parse::<u32>()
+                            .unwrap(),
+                    );
+                } else if line.contains("label=\"i1 (ptr)*\\n") {
+                    fn_call = Some(
+                        line.split_whitespace()
+                            .next()
+                            .unwrap()
+                            .parse::<u32>()
+                            .unwrap(),
+                    );
+                }
+            }
+
+            let fn_call = fn_call.unwrap();
+            let foo = foo.unwrap();
+            let bar = bar.unwrap();
+
+            // there must be an edge from the fictitious node to both `foo` and `bar`
+            assert!(dot.contains(&format!("{} -> {}", fn_call, foo)));
+            assert!(dot.contains(&format!("{} -> {}", fn_call, bar)));
+        })
+    }
+}
+
+#[test]
 fn dynamic_dispatch() {
     if channel_is_nightly() {
         for_each_target(|target| {
@@ -152,7 +201,7 @@ fn dynamic_dispatch() {
                             .parse::<u32>()
                             .unwrap(),
                     );
-                } else if line.contains("label=\"i1 ({}*)\\n") {
+                } else if line.contains("label=\"i1 (ptr)*\\n") {
                     dyn_call = Some(
                         line.split_whitespace()
                             .next()

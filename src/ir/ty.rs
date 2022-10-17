@@ -12,7 +12,7 @@ use nom::{
 
 use crate::ir::FnSig;
 
-#[derive(Clone, Debug, Eq, Hash)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Type<'a> {
     // `%"crate::module::Struct::<ConcreteType>"`
     Alias(&'a str),
@@ -51,10 +51,12 @@ pub enum Type<'a> {
     MVTVector(usize, Box<Type<'a>>),
 }
 
-impl<'a> PartialEq for Type<'a> {
-    fn eq(&self, other: &Self) -> bool {
+impl<'a> Type<'a> {
+    pub fn loosely_equal(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::OpaquePointer, Self::OpaquePointer) => false,
+            (Self::OpaquePointer, Self::OpaquePointer) => true,
+            (Self::OpaquePointer, Self::Pointer(_)) => true,
+            (Self::Pointer(_), Self::OpaquePointer) => true,
 
             // `derive(PartialEq)` implementation
             (Self::Alias(l0), Self::Alias(r0)) => l0 == r0,
@@ -66,23 +68,6 @@ impl<'a> PartialEq for Type<'a> {
             (Self::Pointer(l0), Self::Pointer(r0)) => l0 == r0,
             (Self::MVTVector(l0, l1), Self::MVTVector(r0, r1)) => l0 == r0 && l1 == r1,
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
-        }
-    }
-}
-
-impl<'a> Type<'a> {
-    pub fn erased() -> Self {
-        Type::Pointer(Box::new(Type::Struct(vec![])))
-    }
-
-    // Rust uses the "erased" type `{}*` for dynamic dispatch
-    pub fn has_been_erased(&self) -> bool {
-        match self {
-            Type::Pointer(ty) => match **ty {
-                Type::Struct(ref fields) => fields.is_empty(),
-                _ => false,
-            },
-            _ => false,
         }
     }
 }

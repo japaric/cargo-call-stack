@@ -598,12 +598,12 @@ mod tests {
 
         // nightly-2022-09-23 / compiler-builtins / __rust_i128_addo
         // cannot rely on `assert_eq` because `PartialEq` returns `false`
-        assert!(matches!(
+        assert_eq!(
+            Ok(("", Parameter(Type::OpaquePointer))),
             super::parameter(
                 "ptr noalias nocapture noundef writeonly sret({ i128, i8 }) dereferenceable(24) %0",
             ),
-            Ok(("", Parameter(Type::OpaquePointer)))
-        ));
+        );
     }
 
     #[test]
@@ -758,7 +758,7 @@ mod tests {
         assert_eq!("__rust_i128_addo", define.name);
         assert_eq!(vec![Stmt::Other], define.stmts);
         assert!(define.sig.output.is_none());
-        assert!(matches!(define.sig.inputs[0], Type::OpaquePointer));
+        assert_eq!(Type::OpaquePointer, define.sig.inputs[0]);
         assert_eq!(
             [Type::Integer(128), Type::Integer(128)],
             define.sig.inputs[1..]
@@ -774,12 +774,9 @@ mod tests {
             define.name
         );
         assert_eq!(vec![Stmt::Other], define.stmts);
-        assert!(matches!(
-            define.sig.output.as_deref(),
-            Some(Type::OpaquePointer)
-        ));
-        assert!(matches!(define.sig.inputs[0], Type::OpaquePointer));
-        assert!(matches!(define.sig.inputs[1], Type::OpaquePointer));
+        assert_eq!(Some(&Type::OpaquePointer), define.sig.output.as_deref(),);
+        assert_eq!(Type::OpaquePointer, define.sig.inputs[0]);
+        assert_eq!(Type::OpaquePointer, define.sig.inputs[1]);
         assert_eq!([Type::Integer(32)], define.sig.inputs[2..]);
     }
 }

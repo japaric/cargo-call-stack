@@ -29,6 +29,22 @@ pub struct FnSig<'a> {
     pub output: Option<Box<Type<'a>>>,
 }
 
+impl<'a> FnSig<'a> {
+    pub fn loosely_equal(&self, other: &Self) -> bool {
+        self.inputs.len() == other.inputs.len()
+            && self
+                .inputs
+                .iter()
+                .zip(&other.inputs)
+                .all(|(lhs, rhs)| lhs.loosely_equal(&rhs))
+            && match (&self.output, &other.output) {
+                (None, None) => true,
+                (Some(lhs), Some(rhs)) => lhs.loosely_equal(&rhs),
+                _ => false,
+            }
+    }
+}
+
 impl<'a> fmt::Display for FnSig<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(output) = &self.output {

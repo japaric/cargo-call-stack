@@ -413,7 +413,6 @@ fn run() -> anyhow::Result<i32> {
     let mut indices = BTreeMap::<Cow<str>, _>::new();
 
     let mut indirects: HashMap<FnSig, Indirect> = HashMap::new();
-    let mut dynamics: HashMap<FnSig, Dynamic> = HashMap::new();
     // functions that could be called by `ArgumentV1.formatter`
     let mut fmts = HashSet::new();
 
@@ -499,14 +498,6 @@ fn run() -> anyhow::Result<i32> {
         let idx = g.add_node(Node(canonical_name, stack, false));
         indices.insert(canonical_name.into(), idx);
 
-        // trait methods look like `<crate::module::Type as crate::module::Trait>::method::h$hash`
-        // default trait methods look like `crate::module::Trait::method::h$hash`
-        let is_trait_method = demangled.starts_with("<") && demangled.contains(" as ") || {
-            dehash(&demangled)
-                .map(|path| default_methods.contains(path))
-                .unwrap_or(false)
-        };
-
         if let Some(def) = names.iter().filter_map(|name| defines.get(name)).next() {
             // if the signature is `fn(&_, &mut fmt::Formatter) -> fmt::Result`
             match (&def.sig.inputs[..], def.sig.output.as_ref()) {
@@ -520,40 +511,16 @@ fn run() -> anyhow::Result<i32> {
                 _ => {}
             }
 
-            let is_object_safe = is_trait_method && {
-                match def.sig.inputs.first().as_ref() {
-                    Some(Type::Pointer(ty)) => match **ty {
-                        // XXX can the receiver be a *specific* function? (e.g. `fn() {foo}`)
-                        Type::Fn(_) => false,
-
-                        _ => true,
-                    },
-                    _ => false,
-                }
-            };
-
-            if is_object_safe {
-                let mut sig = def.sig.clone();
-
-                // erase the type of the reciver
-                sig.inputs[0] = Type::erased();
-
-                dynamics.entry(sig).or_default().callees.insert(idx);
-            } else {
-                indirects
-                    .entry(def.sig.clone())
-                    .or_default()
-                    .callees
-                    .insert(idx);
-            }
+            indirects
+                .entry(def.sig.clone())
+                .or_default()
+                .callees
+                .insert(idx);
         } else if let Some(sig) = names
             .iter()
             .filter_map(|name| declares.get(name).and_then(|decl| decl.sig.clone()))
             .next()
         {
-            // sanity check (?)
-            assert!(!is_trait_method, "BUG: undefined trait method");
-
             indirects.entry(sig).or_default().callees.insert(idx);
         } else if !is_outlined_function(canonical_name) {
             // ^ functions produced by LLVM's function outliner are never called through function
@@ -769,22 +736,11 @@ fn run() -> anyhow::Result<i32> {
                 }
 
                 Stmt::IndirectCall(sig) => {
-                    if sig
-                        .inputs
-                        .first()
-                        .map(|ty| ty.has_been_erased())
-                        .unwrap_or(false)
-                    {
-                        // dynamic dispatch
-                        let dynamic = dynamics.entry(sig.clone()).or_default();
-
-                        dynamic.called = true;
-                        dynamic.callers.insert(caller);
-                    } else {
-                        let indirect = indirects.entry(sig.clone()).or_default();
-
-                        indirect.called = true;
-                        indirect.callers.insert(caller);
+                    for (key_sig, indirect) in &mut indirects {
+                        if key_sig.loosely_equal(sig) {
+                            indirect.called = true;
+                            indirect.callers.insert(caller);
+                        }
                     }
                 }
 
@@ -1090,28 +1046,6 @@ fn run() -> anyhow::Result<i32> {
         }
 
         for callee in callees {
-            g.add_edge(call, *callee, ());
-        }
-    }
-
-    // add fictitious nodes for dynamic dispatch
-    for (sig, dynamic) in dynamics {
-        if !dynamic.called {
-            continue;
-        }
-
-        let name = sig.to_string();
-
-        if dynamic.callees.is_empty() {
-            error!("BUG? no callees for `{}`", name);
-        }
-
-        let call = g.add_node(Node(name, Some(0), true));
-        for caller in &dynamic.callers {
-            g.add_edge(*caller, call, ());
-        }
-
-        for callee in &dynamic.callees {
             g.add_edge(call, *callee, ());
         }
     }
@@ -1487,16 +1421,8 @@ impl fmt::Display for Max {
 }
 
 // used to track indirect function calls (`fn` pointers)
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Indirect {
-    called: bool,
-    callers: HashSet<NodeIndex>,
-    callees: HashSet<NodeIndex>,
-}
-
-// used to track dynamic dispatch (trait objects)
-#[derive(Debug, Default)]
-struct Dynamic {
     called: bool,
     callers: HashSet<NodeIndex>,
     callees: HashSet<NodeIndex>,
