@@ -2,8 +2,15 @@ use std::{env, process::Command};
 
 use rustc_version::Channel;
 
-fn for_each_target(mut f: impl FnMut(&str)) {
-    for target in ["thumbv6m-none-eabi", "thumbv7m-none-eabi"] {
+const ALL_TARGETS: &[&str] = &[
+    "thumbv6m-none-eabi",
+    "thumbv7m-none-eabi",
+    "aarch64-unknown-none",
+];
+const FMUL_TARGETS: &[&str] = &["thumbv6m-none-eabi", "thumbv7m-none-eabi"];
+
+fn for_all_targets(mut f: impl FnMut(&str)) {
+    for target in ALL_TARGETS {
         f(target)
     }
 }
@@ -30,7 +37,7 @@ fn cycle() {
 #[test]
 fn fmul() {
     if channel_is_nightly() {
-        for_each_target(|target| {
+        for target in FMUL_TARGETS {
             let dot = call_stack("fmul", target);
 
             let mut entry_point = None;
@@ -61,14 +68,14 @@ fn fmul() {
 
             // there must be an edge between the entry point and `__aeabi_fmul`
             assert!(dot.contains(&format!("{} -> {}", main, fmul)));
-        })
+        }
     }
 }
 
 #[test]
 fn function_pointer() {
     if channel_is_nightly() {
-        for_each_target(|target| {
+        for_all_targets(|target| {
             let dot = call_stack("function-pointer", target);
 
             let mut foo = None;
@@ -117,7 +124,7 @@ fn function_pointer() {
 #[test]
 fn function_pointer_ptr() {
     if channel_is_nightly() {
-        for_each_target(|target| {
+        for_all_targets(|target| {
             let dot = call_stack("function-pointer-ptr", target);
 
             let mut foo = None;
@@ -166,7 +173,7 @@ fn function_pointer_ptr() {
 #[test]
 fn dynamic_dispatch() {
     if channel_is_nightly() {
-        for_each_target(|target| {
+        for_all_targets(|target| {
             let dot = call_stack("dynamic-dispatch", target);
 
             let mut bar = None;
@@ -230,7 +237,7 @@ fn dynamic_dispatch() {
 #[test]
 fn core_fmt() {
     if channel_is_nightly() {
-        for_each_target(|target| {
+        for_all_targets(|target| {
             let _should_not_error = call_stack("core-fmt", target);
         })
     }
@@ -239,7 +246,7 @@ fn core_fmt() {
 #[test]
 fn panic_fmt() {
     if channel_is_nightly() {
-        for_each_target(|target| {
+        for_all_targets(|target| {
             let _should_not_error = call_stack("panic-fmt", target);
         })
     }
@@ -248,7 +255,7 @@ fn panic_fmt() {
 #[test]
 fn div64() {
     if channel_is_nightly() {
-        for_each_target(|target| {
+        for_all_targets(|target| {
             let _should_not_error = call_stack("div64", target);
         })
     }
@@ -257,8 +264,17 @@ fn div64() {
 #[test]
 fn gh63() {
     if channel_is_nightly() {
-        for_each_target(|target| {
+        for_all_targets(|target| {
             let _should_not_error = call_stack("memcmp-ir-no-call", target);
+        })
+    }
+}
+
+#[test]
+fn gh74() {
+    if channel_is_nightly() {
+        for_all_targets(|target| {
+            let _should_not_error = call_stack("abs-i32", target);
         })
     }
 }
