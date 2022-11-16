@@ -665,7 +665,8 @@ fn run() -> anyhow::Result<i32> {
                     }
 
                     // XXX unclear whether these produce library calls on some platforms or not
-                    if func.starts_with("llvm.bswap.")
+                    if func.starts_with("llvm.abs.")
+                        || func.starts_with("llvm.bswap.")
                         || func.starts_with("llvm.ctlz.")
                         || func.starts_with("llvm.cttz.")
                         || func.starts_with("llvm.sadd.with.overflow.")
