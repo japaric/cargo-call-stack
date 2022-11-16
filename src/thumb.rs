@@ -120,7 +120,7 @@ pub fn analyze(
         } else if matches(first, "0b010000_0100_xxx_xxx") {
             // A7.7.11  ASR (register) - T1
             continue;
-        } else if v7 && matches(first, "0b1101_1110_xxxxxxxx") {
+        } else if matches(first, "0b1101_1110_xxxxxxxx") {
             // NOTE we break the alphabetical order because the rule for `B` overlaps with the rule
             // for `UDF` but `UDF` takes precedence
             // A7.7.191      UDF - T1
