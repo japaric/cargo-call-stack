@@ -5,6 +5,13 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.13] - 2022-11-16
+
+### Fixed
+
+- fixed analysis of ARMv6-M machine code (UDF instruction)
+- handle `llvm.abs.*` instrinsics instead of panicking
+
 ## [v0.1.12] - 2022-10-17
 
 ### Fixed
@@ -183,7 +190,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 Initial release
 
-[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.12...HEAD
+[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.13...HEAD
+[v0.1.13]: https://github.com/japaric/cargo-call-stack/compare/v0.1.12...v0.1.13
 [v0.1.12]: https://github.com/japaric/cargo-call-stack/compare/v0.1.11...v0.1.12
 [v0.1.11]: https://github.com/japaric/cargo-call-stack/compare/v0.1.10...v0.1.11
 [v0.1.10]: https://github.com/japaric/cargo-call-stack/compare/v0.1.9...v0.1.10
