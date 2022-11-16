@@ -451,6 +451,21 @@ fn run() -> anyhow::Result<i32> {
     let mut addr2name = BTreeMap::new();
     for (address, sym) in &symbols.defined {
         let names = sym.names();
+        // filter out tags
+        let names = names
+            .iter()
+            .filter_map(|&name| {
+                if name == "$a"
+                    || name.starts_with("$a.")
+                    || name == "$x"
+                    || name.starts_with("$x.")
+                {
+                    None
+                } else {
+                    Some(name)
+                }
+            })
+            .collect::<Vec<_>>();
 
         let canonical_name = if names.len() > 1 {
             // if one of the aliases appears in the `stack_sizes` dictionary, use that
@@ -458,23 +473,13 @@ fn run() -> anyhow::Result<i32> {
                 needle
             } else {
                 // otherwise, pick the first name that's not a tag
-                names
-                    .iter()
-                    .filter_map(|&name| {
-                        if name == "$a" || name.starts_with("$a.") {
-                            None
-                        } else {
-                            Some(name)
-                        }
-                    })
-                    .next()
-                    .expect("UNREACHABLE")
+                names[0]
             }
         } else {
             names[0]
         };
 
-        for name in names {
+        for name in names.iter().copied() {
             aliases.insert(name, canonical_name);
         }
 
