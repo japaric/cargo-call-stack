@@ -11,7 +11,7 @@ license = "MIT OR Apache-2.0"
 name = "cargo-call-stack"
 readme = "README.md"
 repository = "https://github.com/japaric/cargo-call-stack"
-version = "0.1.13"
+version = "0.1.14"
 
 [dependencies]
 anyhow = "1"
