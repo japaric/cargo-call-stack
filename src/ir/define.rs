@@ -164,7 +164,13 @@ fn argument(i: &str) -> IResult<&str, Argument> {
         map(super::function, drop),
         map(super::null, drop),
         map(super::undef, drop),
-        map(digit1, drop),
+        map(
+            |i| {
+                let i = opt(char('-'))(i)?.0;
+                digit1(i)
+            },
+            drop,
+        ),
     ))(i)?
     .0;
     Ok((i, Argument(ty)))
@@ -531,6 +537,20 @@ mod tests {
                 })
             ))
         );
+
+        // gh84 - negative integer in call argument
+        assert_eq!(
+            super::indirect_call(
+                "tail call void %10(ptr noundef nonnull align 1 %0, i8 -126), !noalias !51875"
+            ),
+            Ok((
+                "",
+                Stmt::IndirectCall(FnSig {
+                    inputs: vec![Type::OpaquePointer, Type::Integer(8)],
+                    output: None,
+                })
+            ))
+        );
     }
 
     #[test]
@@ -780,7 +800,6 @@ mod tests {
         assert_eq!(Type::OpaquePointer, define.sig.inputs[1]);
         assert_eq!([Type::Integer(32)], define.sig.inputs[2..]);
 
-
         // 'undef' type in tail call argument
         let define = super::parse(include_str!("define/parse10.ll").trim())
             .unwrap()
@@ -788,6 +807,16 @@ mod tests {
 
         assert_eq!(
             "_ZN21example_crate9mod_19ExampleStruct13example_method17he93ae98acbb4840aE",
+            define.name
+        );
+
+        // gh84 - negative integer in call argument
+        let define = super::parse(include_str!("define/parse11.ll").trim())
+            .unwrap()
+            .1;
+
+        assert_eq!(
+            "_ZN4ring2io10der_writer22write_positive_integer17h2cbd2a5c98e3e635E",
             define.name
         );
     }
