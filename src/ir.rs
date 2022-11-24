@@ -155,6 +155,14 @@ fn null(i: &str) -> IResult<&str, Null> {
     Ok((i, Null))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Undef;
+
+fn undef(i: &str) -> IResult<&str, Null> {
+    let i = tag("undef")(i)?.0;
+    Ok((i, Null))
+}
+
 // `internal`, `fastcc`, `dereferenceable(4)`, etc.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Attribute;

@@ -163,6 +163,7 @@ fn argument(i: &str) -> IResult<&str, Argument> {
         map(super::local, drop),
         map(super::function, drop),
         map(super::null, drop),
+        map(super::undef, drop),
         map(digit1, drop),
     ))(i)?
     .0;
@@ -778,5 +779,16 @@ mod tests {
         assert_eq!(Type::OpaquePointer, define.sig.inputs[0]);
         assert_eq!(Type::OpaquePointer, define.sig.inputs[1]);
         assert_eq!([Type::Integer(32)], define.sig.inputs[2..]);
+
+
+        // 'undef' type in tail call argument
+        let define = super::parse(include_str!("define/parse10.ll").trim())
+            .unwrap()
+            .1;
+
+        assert_eq!(
+            "_ZN21example_crate9mod_19ExampleStruct13example_method17he93ae98acbb4840aE",
+            define.name
+        );
     }
 }
