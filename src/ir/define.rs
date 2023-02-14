@@ -171,6 +171,8 @@ fn argument(i: &str) -> IResult<&str, Argument> {
             },
             drop,
         ),
+        map(tag("true"), drop),
+        map(tag("false"), drop),
     ))(i)?
     .0;
     Ok((i, Argument(ty)))
@@ -548,6 +550,20 @@ mod tests {
                 Stmt::IndirectCall(FnSig {
                     inputs: vec![Type::OpaquePointer, Type::Integer(8)],
                     output: None,
+                })
+            ))
+        );
+
+        // boolean in call argument
+        assert_eq!(
+            super::indirect_call(
+                "call noundef i8 %1105(i1 noundef zeroext false) #30, !dbg !66716, !range !53217, !noalias !66298"
+            ),
+            Ok((
+                "",
+                Stmt::IndirectCall(FnSig {
+                    inputs: vec![Type::Integer(1)],
+                    output: Some(Box::new(Type::Integer(8))),
                 })
             ))
         );
