@@ -19,7 +19,7 @@ use std::{
 use anyhow::{anyhow, bail};
 use ar::Archive;
 use cargo_project::{Artifact, Profile, Project};
-use clap::{crate_authors, crate_version, App, Arg};
+use clap::Parser;
 use env_logger::{Builder, Env};
 use filetime::FileTime;
 use log::{error, warn};
@@ -40,6 +40,38 @@ use crate::{
 mod ir;
 mod thumb;
 mod wrapper;
+
+/// Generate a call graph and perform whole program stack usage analysis
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Target triple for which the code is compiled
+    #[arg(long, value_name = "TRIPLE")]
+    target: Option<String>,
+
+    /// Build only the specified binary
+    #[arg(long, value_name = "BIN")]
+    bin: Option<String>,
+
+    /// Build only the specified example
+    #[arg(long, value_name = "NAME")]
+    example: Option<String>,
+
+    /// Space-separated list of features to activate
+    #[arg(long, value_name = "FEATURES")]
+    features: Option<String>,
+
+    /// Activate all available features
+    #[arg(long)]
+    all_features: bool,
+
+    /// Use verbose output
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// consider only the call graph that starts from this node
+    start: Option<String>,
+}
 
 fn main() -> anyhow::Result<()> {
     match run() {
@@ -62,76 +94,20 @@ fn run() -> anyhow::Result<i32> {
 
     Builder::from_env(Env::default().default_filter_or("warn")).init();
 
-    let matches = App::new("cargo-call-stack")
-        .version(crate_version!())
-        .author(crate_authors!(", "))
-        .about("Generate a call graph and perform whole program stack usage analysis")
-        // as this is used as a Cargo subcommand the first argument will be the name of the binary
-        // we ignore this argument
-        .arg(Arg::with_name("binary-name").hidden(true))
-        .arg(
-            Arg::with_name("target")
-                .long("target")
-                .takes_value(true)
-                .value_name("TRIPLE")
-                .help("Target triple for which the code is compiled"),
-        )
-        .arg(
-            Arg::with_name("verbose")
-                .long("verbose")
-                .short("v")
-                .help("Use verbose output"),
-        )
-        .arg(
-            Arg::with_name("example")
-                .long("example")
-                .takes_value(true)
-                .value_name("NAME")
-                .help("Build only the specified example"),
-        )
-        .arg(
-            Arg::with_name("bin")
-                .long("bin")
-                .takes_value(true)
-                .value_name("BIN")
-                .help("Build only the specified binary"),
-        )
-        .arg(
-            Arg::with_name("features")
-                .long("features")
-                .takes_value(true)
-                .value_name("FEATURES")
-                .help("Space-separated list of features to activate"),
-        )
-        .arg(
-            Arg::with_name("all-features")
-                .long("all-features")
-                .takes_value(false)
-                .help("Activate all available features"),
-        )
-        .arg(
-            Arg::with_name("START").help("consider only the call graph that starts from this node"),
-        )
-        .get_matches();
-    let is_example = matches.is_present("example");
-    let is_binary = matches.is_present("bin");
-    let verbose = matches.is_present("verbose");
-    let target_flag = matches.value_of("target");
+    let args = Args::parse();
     let profile = Profile::Release;
 
-    let file;
-    match (is_example, is_binary) {
-        (true, false) => file = matches.value_of("example").unwrap(),
-        (false, true) => file = matches.value_of("bin").unwrap(),
-        _ => {
-            bail!("Please specify either --example <NAME> or --bin <NAME>.")
-        }
-    }
+    let file = match (&args.example, &args.bin) {
+        (Some(f), None) => f,
+        (None, Some(f)) => f,
+        _ => bail!("Please specify either --example <NAME> or --bin <NAME>."),
+    };
 
     let meta = rustc_version::version_meta()?;
     let host = meta.host;
     let cwd = env::current_dir()?;
     let project = Project::query(cwd)?;
+    let target_flag = args.target.as_deref();
     let target = project.target().or(target_flag).unwrap_or(&host);
 
     let mut is_no_std = false;
@@ -157,17 +133,17 @@ fn run() -> anyhow::Result<i32> {
         cargo.args(&["--target", target]);
     }
 
-    if matches.is_present("all-features") {
+    if args.all_features {
         cargo.arg("--all-features");
-    } else if let Some(features) = matches.value_of("features") {
+    } else if let Some(features) = &args.features {
         cargo.args(&["--features", features]);
     }
 
-    if is_example {
+    if args.example.is_some() {
         cargo.args(&["--example", file]);
     }
 
-    if is_binary {
+    if args.bin.is_some() {
         cargo.args(&["--bin", file]);
     }
 
@@ -219,7 +195,7 @@ fn run() -> anyhow::Result<i32> {
         }
     }
 
-    if verbose {
+    if args.verbose {
         eprintln!("{:?}", cargo);
     }
 
@@ -251,7 +227,7 @@ fn run() -> anyhow::Result<i32> {
     let compiler_builtins_ll_path =
         compiler_builtins_ll_path.expect("`compiler_builtins` LLVM IR unavailable");
 
-    let mut path: PathBuf = if is_example {
+    let mut path: PathBuf = if args.example.is_some() {
         project.path(Artifact::Example(file), profile, target_flag, &host)?
     } else {
         project.path(Artifact::Bin(file), profile, target_flag, &host)?
@@ -268,7 +244,7 @@ fn run() -> anyhow::Result<i32> {
 
     path = path.parent().expect("unreachable").to_path_buf();
 
-    if is_binary {
+    if args.bin.is_some() {
         path = path.join("deps"); // the .ll file is placed in ../deps
     }
 
@@ -1057,7 +1033,8 @@ fn run() -> anyhow::Result<i32> {
     }
 
     // filter the call graph
-    if let Some(start) = matches.value_of("START") {
+    if let Some(start) = &args.start {
+        let start: &str = start;
         let start = indices.get(start).cloned().or_else(|| {
             let start_ = start.to_owned() + "::h";
             let hits = indices
