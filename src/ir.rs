@@ -7,7 +7,8 @@ use nom::{
     character::complete::{char, digit1, line_ending, not_line_ending, space1},
     combinator::{map, map_res, opt},
     error::ErrorKind,
-    multi::{many0, many1, separated_list},
+    error_position,
+    multi::{many0, many1, separated_list0},
     sequence::delimited,
     IResult,
 };
@@ -70,13 +71,13 @@ impl<'a> fmt::Display for FnSig<'a> {
 
 pub fn parse(ll: &str) -> anyhow::Result<Vec<Item>> {
     items(ll).map(|t| t.1).map_err(|e| {
-        let e = e.map(|(rest, kind)| {
-            let offset = ll.len()-rest.len();
+        let e = e.map(|e| {
+            let offset = ll.len()-e.input.len();
             let mut cur = offset;
             for (n, line) in ll.split_inclusive('\n').enumerate() {
                 match cur.checked_sub(line.len()) {
                     Some(it) => cur = it,
-                    None => return format!("{:?} in line {}", kind, n + 1),
+                    None => return format!("{:?} in line {}", e.code, n + 1),
                 }
             }
 
@@ -90,12 +91,12 @@ pub fn parse(ll: &str) -> anyhow::Result<Vec<Item>> {
 }
 
 fn items(i: &str) -> IResult<&str, Vec<Item>> {
-    let (i, items) = separated_list(many1(line_ending), crate::ir::item::item)(i)?;
+    let (i, items) = separated_list0(many1(line_ending), crate::ir::item::item)(i)?;
     let i = many0(line_ending)(i)?.0;
     if i.is_empty() {
         Ok(("", items))
     } else {
-        Err(nom::Err::Failure((i, ErrorKind::Eof)))
+        Err(nom::Err::Failure(error_position!(i, ErrorKind::Eof)))
     }
 }
 
@@ -191,17 +192,17 @@ fn attribute(i: &str) -> IResult<&str, Attribute> {
 
         // have this branch always error because this is not an attribute but part of a type
         "double" | "float" | "void" | "ptr" => {
-            return Err(nom::Err::Error((i, ErrorKind::Switch)));
+            return Err(nom::Err::Error(error_position!(i, ErrorKind::Switch)));
         }
 
         // have this branch always error because there are not attributes but operations
         "bitcast" | "getelementptr" => {
-            return Err(nom::Err::Error((i, ErrorKind::Switch)));
+            return Err(nom::Err::Error(error_position!(i, ErrorKind::Switch)));
         }
 
         // have this branch always error because there are not attributes but keywords
         "alias" | "global" | "constant" => {
-            return Err(nom::Err::Error((i, ErrorKind::Switch)));
+            return Err(nom::Err::Error(error_position!(i, ErrorKind::Switch)));
         }
 
         _ => i,
