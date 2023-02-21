@@ -19,7 +19,7 @@ use std::{
 use anyhow::{anyhow, bail};
 use ar::Archive;
 use cargo_project::{Artifact, Profile, Project};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use env_logger::{Builder, Env};
 use filetime::FileTime;
 use log::{error, warn};
@@ -40,6 +40,12 @@ use crate::{
 mod ir;
 mod thumb;
 mod wrapper;
+
+#[derive(ValueEnum, PartialEq, Debug, Clone, Copy)]
+enum OutputFormat {
+    Dot,
+    Top,
+}
 
 /// Generate a call graph and perform whole program stack usage analysis
 #[derive(Parser, Debug)]
@@ -68,6 +74,10 @@ struct Args {
     /// Use verbose output
     #[arg(short, long)]
     verbose: bool,
+
+    /// Output format
+    #[arg(long, default_value = "dot")]
+    format: OutputFormat,
 
     /// consider only the call graph that starts from this node
     start: Option<String>,
@@ -1193,7 +1203,10 @@ fn run() -> anyhow::Result<i32> {
         }
     }
 
-    dot(g, &cycles)?;
+    match args.format {
+        OutputFormat::Dot => dot(g, &cycles)?,
+        OutputFormat::Top => top(g)?,
+    }
 
     Ok(0)
 }
@@ -1252,7 +1265,54 @@ fn dot(g: Graph<Node, ()>, cycles: &[Vec<NodeIndex>]) -> io::Result<()> {
     writeln!(stdout, "}}")
 }
 
-struct Escaper<W>
+pub(crate) fn top(g: Graph<Node, ()>) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+
+    assert!(g.is_directed());
+
+    let mut nodes: Vec<Node> = Vec::new();
+    for node in g.raw_nodes().iter() {
+        nodes.push(node.weight.clone());
+    }
+
+    // Locate max
+    if let Some(max) = max_of(nodes.iter().map(|n| n.max.unwrap_or(Max::Exact(0)))) {
+        writeln!(
+            stdout,
+            "{} MAX",
+            match max {
+                Max::Exact(n) => n,
+                Max::LowerBound(n) => n,
+            }
+        )?;
+    }
+
+    writeln!(stdout, "Usage Function")?;
+
+    nodes.sort_by(|a, b| {
+        let a: u64 = if let Local::Exact(n) = a.local { n } else { 0 };
+        let b: u64 = if let Local::Exact(n) = b.local { n } else { 0 };
+        b.cmp(&a)
+    });
+
+    for node in nodes.iter() {
+        let name = rustc_demangle::demangle(&node.name);
+        let val: u64 = if let Local::Exact(n) = node.local {
+            n
+        } else {
+            0
+        };
+        write!(stdout, "{} ", val)?;
+
+        let mut escaper = Escaper::new(&mut stdout);
+        writeln!(escaper, "{}", name).ok();
+        escaper.error?;
+    }
+    Ok(())
+}
+
+pub(crate) struct Escaper<W>
 where
     W: io::Write,
 {
