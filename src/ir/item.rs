@@ -3,7 +3,7 @@ use nom::{
     bytes::complete::tag,
     character::complete::{char, not_line_ending, space0, space1},
     combinator::map,
-    multi::{many0, separated_list},
+    multi::{many0, separated_list0},
     IResult,
 };
 
@@ -144,7 +144,7 @@ fn declare(i: &str) -> IResult<&str, Item> {
         let i = not_line_ending(i)?.0;
         Ok((i, Item::Declare(Declare { name, sig: None })))
     } else {
-        let (i, inputs) = separated_list(
+        let (i, inputs) = separated_list0(
             |i| {
                 let i = char(',')(i)?.0;
                 space1(i)

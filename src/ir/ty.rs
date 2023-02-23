@@ -5,7 +5,7 @@ use nom::{
     bytes::complete::tag,
     character::complete::{char, digit1, space0, space1},
     combinator::{map, map_res, opt},
-    multi::separated_list,
+    multi::separated_list0,
     sequence::delimited,
     IResult,
 };
@@ -220,7 +220,7 @@ fn varargs(i: &str) -> IResult<&str, Type> {
 fn _struct(i: &str) -> IResult<&str, Vec<Type>> {
     let i = char('{')(i)?.0;
     let i = space0(i)?.0;
-    let (i, fields) = separated_list(
+    let (i, fields) = separated_list0(
         |i| {
             let i = char(',')(i)?.0;
             space1(i)
@@ -331,7 +331,7 @@ pub fn type_(i: &str) -> IResult<&str, Type> {
 fn fn_inputs(i: &str) -> IResult<&str, Vec<Type>> {
     let i = char('(')(i)?.0;
     let i = space0(i)?.0;
-    let (i, inputs) = separated_list(
+    let (i, inputs) = separated_list0(
         |i| {
             let i = char(',')(i)?.0;
             space1(i)

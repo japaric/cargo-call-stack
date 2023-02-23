@@ -3,7 +3,7 @@ use nom::{
     bytes::complete::{is_not, tag},
     character::complete::{char, digit1, line_ending, not_line_ending, space1},
     combinator::{map, map_res, opt},
-    multi::{many0, many1, separated_list, separated_nonempty_list},
+    multi::{many0, many1, separated_list0, separated_list1},
     sequence::delimited,
     IResult,
 };
@@ -73,7 +73,7 @@ pub fn parse(i: &str) -> IResult<&str, Define> {
 
     // parameter list
     let i = char('(')(i)?.0;
-    let (i, inputs) = separated_list(
+    let (i, inputs) = separated_list0(
         |i| {
             let i = char(',')(i)?.0;
             space1(i)
@@ -86,7 +86,7 @@ pub fn parse(i: &str) -> IResult<&str, Define> {
     // NOTE shortcut
     let i = not_line_ending(i)?.0;
     let i = line_ending(i)?.0;
-    let (i, stmts) = separated_nonempty_list(many1(line_ending), super::define::stmt)(i)?;
+    let (i, stmts) = separated_list1(many1(line_ending), super::define::stmt)(i)?;
     let i = opt(line_ending)(i)?.0;
     let i = tag("}")(i)?.0;
     Ok((
@@ -241,7 +241,7 @@ fn indirect_call(i: &str) -> IResult<&str, Stmt> {
     let i = super::local(i)?.0;
     let (i, inputs) = delimited(
         char('('),
-        separated_list(
+        separated_list0(
             |i| {
                 let i = char(',')(i)?.0;
                 space1(i)
@@ -263,7 +263,7 @@ fn indirect_call(i: &str) -> IResult<&str, Stmt> {
 }
 
 fn other(i: &str) -> IResult<&str, Stmt> {
-    let i = separated_nonempty_list(
+    let i = separated_list1(
         space1,
         map_res(is_not(" \t\r\n"), |i| {
             if i == "call" {
