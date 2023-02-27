@@ -82,7 +82,10 @@ options (e.g. `--features`).
 
 [`cortex-m-rt`]: https://crates.io/crates/cortex-m-rt
 
-> IMPORTANT: the analysis corresponds to the newly produced binary,
+> **NOTE** if you have *not* set a compilation target in e.g. `.cargo/config.toml` then you'll need
+> to pass the `--target` flag to `cargo-call-stack` even if you are *not* cross compiling 
+
+> **NOTE** the analysis corresponds to the newly produced binary,
 > which won't be the same as the binary produced by `cargo +nightly build --release`
 
 ``` console
