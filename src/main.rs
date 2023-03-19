@@ -659,7 +659,9 @@ fn run() -> anyhow::Result<i32> {
                     if func.starts_with("llvm.abs.")
                         || func.starts_with("llvm.bswap.")
                         || func.starts_with("llvm.ctlz.")
+                        || func.starts_with("llvm.ctpop.")
                         || func.starts_with("llvm.cttz.")
+                        || func.starts_with("llvm.fshl.")
                         || func.starts_with("llvm.sadd.with.overflow.")
                         || func.starts_with("llvm.smul.with.overflow.")
                         || func.starts_with("llvm.ssub.with.overflow.")
@@ -672,6 +674,7 @@ fn run() -> anyhow::Result<i32> {
                         || func.starts_with("llvm.usub.with.overflow.")
                         || func.starts_with("llvm.vector.reduce.")
                         || func.starts_with("llvm.x86.sse2.pmovmskb.")
+                        || *func == "llvm.aarch64.isb"
                         || *func == "llvm.x86.sse2.pause"
                     {
                         if !llvm_seen.contains(func) {
