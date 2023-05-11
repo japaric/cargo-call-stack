@@ -670,7 +670,12 @@ fn run() -> anyhow::Result<i32> {
                         || func.starts_with("llvm.umul.with.overflow.")
                         || func.starts_with("llvm.usub.sat.")
                         || func.starts_with("llvm.usub.with.overflow.")
+                        || func.starts_with("llvm.fshl.")
+                        || func.starts_with("llvm.fshr.")
+                        || func.starts_with("llvm.load.relative.")
                         || func.starts_with("llvm.vector.reduce.")
+                        || func.starts_with("llvm.bitreverse.")
+                        || func.starts_with("llvm.fptoui.sat.")
                         || func.starts_with("llvm.x86.sse2.pmovmskb.")
                         || *func == "llvm.x86.sse2.pause"
                     {
