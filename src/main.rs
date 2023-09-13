@@ -79,6 +79,10 @@ struct Args {
     #[arg(long, default_value = "dot")]
     format: OutputFormat,
 
+    /// Argument forwarded to cargo as `-Zbuild-std=?`
+    #[arg(long)]
+    build_std: Option<String>,
+
     /// consider only the call graph that starts from this node
     start: Option<String>,
 }
@@ -161,14 +165,21 @@ fn run() -> anyhow::Result<i32> {
         cargo.arg("--release");
     }
 
-    let build_std = if is_no_std {
-        "-Zbuild-std=core,alloc,compiler_builtins"
+    if is_no_std && args.build_std.is_none() {
+        warn!(concat!(
+            "Building no_std target, did you mean to specify ",
+            "--build_std=core,alloc,compiler_builtins ?",
+        ))
+    }
+
+    let build_std = if let Some(std_components) = args.build_std {
+        format!("-Zbuild-std={std_components}")
     } else {
-        "-Zbuild-std"
+        String::from("-Zbuild-std")
     };
 
     cargo.args(&[
-        build_std,
+        &build_std,
         "--color=always",
         "--",
         // .ll file
