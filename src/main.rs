@@ -672,6 +672,9 @@ fn run() -> anyhow::Result<i32> {
                         || func.starts_with("llvm.usub.with.overflow.")
                         || func.starts_with("llvm.vector.reduce.")
                         || func.starts_with("llvm.x86.sse2.pmovmskb.")
+                        || func.starts_with("llvm.x86.sha256")
+                        || *func == "llvm.aarch64.isb"
+                        || *func == "llvm.x86.xgetbv"
                         || *func == "llvm.x86.sse2.pause"
                     {
                         if !llvm_seen.contains(func) {
