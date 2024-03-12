@@ -20,7 +20,7 @@ mod ty;
 use crate::ir::ty::type_;
 pub use crate::ir::{
     define::Stmt,
-    item::{Declare, Item},
+    item::Item,
     ty::Type,
 };
 
