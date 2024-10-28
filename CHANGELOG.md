@@ -5,6 +5,16 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [v0.1.15] - 2024-10-28
+
+### Added
+
+- note at invocation time which toolchain is known to work
+
+### Changed
+
+- bump known working version to nightly-2023-11-13
+
 ## [v0.1.14] - 2022-11-24
 
 ### Fixed
