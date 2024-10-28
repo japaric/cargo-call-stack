@@ -5,7 +5,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
-## [v0.1.15] - 2024-10-28
+## [v0.1.16] - 2024-10-28
 
 ### Added
 
@@ -14,6 +14,16 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 ### Changed
 
 - bump known working version to nightly-2023-11-13
+
+## [v0.1.15] - 2023-02-27
+
+### Added
+
+- alternative top-like output via the new `--format` flag
+
+### Fixed
+
+- ir parser: accept `true`/`false` as `i1` values
 
 ## [v0.1.14] - 2022-11-24
 
@@ -207,7 +217,9 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 Initial release
 
-[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.14...HEAD
+[Unreleased]: https://github.com/japaric/cargo-call-stack/compare/v0.1.16...HEAD
+[v0.1.16]: https://github.com/japaric/cargo-call-stack/compare/v0.1.15...v0.1.16
+[v0.1.15]: https://github.com/japaric/cargo-call-stack/compare/v0.1.14...v0.1.15
 [v0.1.14]: https://github.com/japaric/cargo-call-stack/compare/v0.1.13...v0.1.14
 [v0.1.13]: https://github.com/japaric/cargo-call-stack/compare/v0.1.12...v0.1.13
 [v0.1.12]: https://github.com/japaric/cargo-call-stack/compare/v0.1.11...v0.1.12
