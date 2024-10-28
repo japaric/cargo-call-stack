@@ -217,7 +217,7 @@ pub fn item(i: &str) -> IResult<&str, Item> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ir::{Declare, FnSig, Item, Type};
+    use crate::ir::{item::Declare, FnSig, Item, Type};
 
     #[test]
     fn alias() {

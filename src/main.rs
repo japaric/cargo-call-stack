@@ -1,5 +1,3 @@
-#![deny(warnings)]
-
 use core::{
     cmp,
     fmt::{self, Write as _},
