@@ -10,30 +10,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  host-test:
+  all-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 
       - name: Run disassembler test suite
-        run: cargo test
+        run: cargo test --bin cargo-call-stack
 
-  firmware-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Set up nightly toolchain (~1.64)
-        run: |
-          rustup default nightly-2022-09-20
-          rustup target add thumbv6m-none-eabi thumbv7m-none-eabi
-          rustup component add rust-src
-
-      - name: Install cargo-call-stack
-        run: cargo install --path . --debug
-
-      - name: Analyze example firmware
-        run: cargo test
+        # one test at a time because rustup does not handle well concurrency
+      - name: Run firmware tests
+        run: cargo test --test firmware -- --test-threads 1
 
   # Refs: https://github.com/rust-lang/crater/blob/9ab6f9697c901c4a44025cf0a39b73ad5b37d198/.github/workflows/bors.yml#L125-L149
   # bors.tech integration
@@ -41,8 +28,7 @@ jobs:
     name: CI
     if: ${{ success() }}
     needs:
-      - host-test
-      - firmware-test
+      - all-tests
     runs-on: ubuntu-20.04
     steps:
       - name: CI succeeded
