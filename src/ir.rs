@@ -18,11 +18,7 @@ mod item;
 mod ty;
 
 use crate::ir::ty::type_;
-pub use crate::ir::{
-    define::Stmt,
-    item::{Declare, Item},
-    ty::Type,
-};
+pub use crate::ir::{define::Stmt, item::Item, ty::Type};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct FnSig<'a> {
@@ -155,9 +151,6 @@ fn null(i: &str) -> IResult<&str, Null> {
     let i = tag("null")(i)?.0;
     Ok((i, Null))
 }
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Undef;
 
 fn undef(i: &str) -> IResult<&str, Null> {
     let i = tag("undef")(i)?.0;

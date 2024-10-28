@@ -1,5 +1,3 @@
-#![deny(warnings)]
-
 use core::{
     cmp,
     fmt::{self, Write as _},
@@ -96,10 +94,35 @@ fn main() -> anyhow::Result<()> {
 // Font used in the dot graphs
 const FONT: &str = "monospace";
 
+const SUPPORTED_NIGHTLY_HASH: &str = "2b603f95a48f10f931a61dd208fe3e5ffd64e491";
+const SUPPORTED_NIGHTLY_NAME: &str = "nightly-2023-11-13";
+const UNSUPPORTED_MODE_KEY: &str = "CARGO_CALL_STACK_UNSPPORTED_NIGHTLY";
+const UNSUPPORTED_MODE_VALUE: &str = "I won't open issues about unsupported toolchains";
+
 #[allow(deprecated)]
 fn run() -> anyhow::Result<i32> {
     if env::var_os("CARGO_CALL_STACK_RUSTC_WRAPPER").is_some() {
         return wrapper::wrapper();
+    }
+
+    let meta = rustc_version::version_meta()?;
+
+    if meta.commit_hash.as_deref() != Some(SUPPORTED_NIGHTLY_HASH)
+        && env::var(UNSUPPORTED_MODE_KEY).as_deref() != Ok(UNSUPPORTED_MODE_VALUE)
+    {
+        eprintln!("Your rust toolchain does not match the last known working version, which is {SUPPORTED_NIGHTLY_NAME}.
+
+You can override the toolchain that cargo-call-stack uses like this `cargo +{SUPPORTED_NIGHTLY_NAME} call-stack (..)`.
+See the rustup documentation for other methods to change / pin the toolchain version.
+Note that the `rust-src` component must be available for the specified toolchain;
+that is you may want to run `rustup component add --toolchain {SUPPORTED_NIGHTLY_NAME} rust-src` first.
+
+If you would like to use cargo-call-stack with your current toolchain, which most likely won't work, set the following environment variable as shown below
+
+    export {UNSUPPORTED_MODE_KEY}=\"{UNSUPPORTED_MODE_VALUE}\"
+");
+
+        bail!("unsupported rust toolchain")
     }
 
     Builder::from_env(Env::default().default_filter_or("warn")).init();
@@ -113,7 +136,6 @@ fn run() -> anyhow::Result<i32> {
         _ => bail!("Please specify either --example <NAME> or --bin <NAME>."),
     };
 
-    let meta = rustc_version::version_meta()?;
     let host = meta.host;
     let cwd = env::current_dir()?;
     let project = Project::query(cwd)?;
