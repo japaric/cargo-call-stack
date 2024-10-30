@@ -49,6 +49,10 @@ enum OutputFormat {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+
+    /// The subcommand of this cargo invocation. Should always be "call-stack".
+    _cargo_subcommand: String,
+
     /// Target triple for which the code is compiled
     #[arg(long, value_name = "TRIPLE")]
     target: Option<String>,
