@@ -77,6 +77,10 @@ struct Args {
     #[arg(long, default_value = "dot")]
     format: OutputFormat,
 
+    /// Linker argument (can be specified multiple times)
+    #[arg(long, value_name = "LINK_ARG")]
+    link_arg: Vec<String>,
+
     /// consider only the call graph that starts from this node
     start: Option<String>,
 }
@@ -201,6 +205,11 @@ If you would like to use cargo-call-stack with your current toolchain, which mos
         "-C",
         "lto=fat",
     ]);
+
+    for link_arg in &args.link_arg {
+        cargo.arg("-C");
+        cargo.arg(&format!("link-arg={link_arg}"));
+    }
 
     cargo.env("CARGO_CALL_STACK_RUSTC_WRAPPER", "1");
     cargo.env("RUSTC_WRAPPER", env::current_exe()?);
