@@ -681,7 +681,9 @@ If you would like to use cargo-call-stack with your current toolchain, which mos
                     if func.starts_with("llvm.abs.")
                         || func.starts_with("llvm.bswap.")
                         || func.starts_with("llvm.ctlz.")
+                        || func.starts_with("llvm.ctpop.")
                         || func.starts_with("llvm.cttz.")
+                        || func.starts_with("llvm.fshl.")
                         || func.starts_with("llvm.sadd.with.overflow.")
                         || func.starts_with("llvm.smul.with.overflow.")
                         || func.starts_with("llvm.ssub.with.overflow.")
@@ -694,6 +696,7 @@ If you would like to use cargo-call-stack with your current toolchain, which mos
                         || func.starts_with("llvm.usub.with.overflow.")
                         || func.starts_with("llvm.vector.reduce.")
                         || func.starts_with("llvm.x86.sse2.pmovmskb.")
+                        || *func == "llvm.aarch64.isb"
                         || *func == "llvm.x86.sse2.pause"
                     {
                         if !llvm_seen.contains(func) {
